@@ -260,6 +260,20 @@ $doc text "Cuneiform and hieroglyphs come out right because they ask for\
     on the face." -at [list 20 $y] -width 170
 set y [expr {$y + 10}]
 
+# The credit for the brush face, at the foot of the page that draws it.
+# Permanent Marker is under the Apache License 2.0, which has no font
+# exception, and the subset embedded here keeps no name table - neither its
+# copyright (name ID 0) nor its licence (13, 14) reaches the PDF. So the page
+# says it. Origin as the face's own name table gives it: "Copyright (c) 2010
+# by Font Diner, Inc.", licence text in assets/fonts/licenses/.
+#
+# In the body face, not Helvetica: the document is PDF/A, and PDF/A refuses a
+# font that is not embedded (see the footer in common.tcl).
+lassign [$doc page size] pageWidth pageHeight
+$doc font -family sans -size 6 -color {0.45 0.45 0.45}
+$doc text "Permanent Marker by Font Diner, Inc., Apache License 2.0" \
+    -at [list 20 [expr {$pageHeight - 7}]]
+
 # A page of its own for the right-to-left lines: what a line does and does
 # not reverse is easier to see with room around it than squeezed under the
 # table of faces.

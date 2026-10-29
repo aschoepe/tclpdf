@@ -74,14 +74,24 @@ LICENCE
     Copyright (C) 2026 Alexander Schoepe, Bochum, DE
     Contributors - special thanks: Ralf Fassel
 
-    MIT - see license.terms. It covers all that is installed: the modules,
-    pkgIndex.tcl and icc/, whose profiles end up inside PDF/A documents.
+    MIT - see license.terms. It covers the modules and pkgIndex.tcl. The
+    third part of what is installed, icc/, whose profiles end up inside
+    PDF/A documents, is under the terms of its own files instead:
     sRGB.icc reads "no copyright, use freely", the basICColor CMYK and grey
     intents are zlib (LICENSE-ZLIB-bICC), sRGB2014.icc is under the ICC's
-    terms (LICENSE-ICC.txt); see icc/README.md. Build-time data, not
-    installed: the Adobe Glyph List (tools/agl, BSD licence in its header)
-    and the Adobe core font metrics (examples/assets/fonts/adobe-afm, with
-    Adobe's LICENSE.txt, which must stay with them).
+    terms (LICENSE-ICC.txt); see icc/README.md.
+
+    Three modules hold third-party data, generated from it by the tools
+    under tools/mk*.tcl, and carry its terms in their own header.
+    afmData.tcl holds the widths converted from Adobe's core font metrics,
+    with Adobe's permission paragraph and trademark notices. bidiData.tcl
+    and joiningData.tcl hold tables from the Unicode Character Database,
+    with the Unicode License v3 (also in tools/ucd/LICENSE). The sources
+    themselves travel only in the source archive, not installed: the Adobe
+    Glyph List (tools/agl, BSD licence in its header), the Unicode data
+    files (tools/ucd) and the Adobe AFM files under
+    examples/assets/fonts/adobe-afm, with Adobe's LICENSE.txt, which must
+    stay with them.
 
     NO FONT IS PART OF THE PACKAGE. The faces under examples/assets/fonts
     serve the tests and examples; make install and the release archives

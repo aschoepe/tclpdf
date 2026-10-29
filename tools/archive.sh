@@ -111,15 +111,16 @@ fi
 #
 # examples/assets/xml used to be excluded for an unsettled licence. It is
 # settled, and for the three files there in two different ways. The two ZUGFeRD
-# INVOICES are FeRD samples and carry the FeRD terms as an XML comment in their
-# own head - measured, 5 708 bytes of the 7 929 in the MINIMUM file, 72 per cent
-# of it - and those terms grant free use including redistribution and commercial
-# products. The block is what makes them redistributable, so it MUST NOT be
-# stripped when the files are copied or trimmed. The third file,
-# order-x-comfort.xml, is not a sample at all: it was written here against the
-# Order-X 1.0 specification for example 05.13, carries no third-party terms and
-# travels under this package's own MIT licence. Its head says so, which is where
-# the next reader will look.
+# INVOICES are FeRD sample files from ferd-net.de, and the FeRD terms of use
+# apply to them; they carry those terms as an XML comment in their own head -
+# measured, 5 708 bytes of the 7 929 in the MINIMUM file, 72 per cent of it.
+# The terms grant free use of the data format, its further development and its
+# use in commercial products. The block states the terms the files travel
+# under, so it MUST NOT be stripped when the files are copied or trimmed. The
+# third file, order-x-comfort.xml, is not a sample at all: it was written here
+# against the Order-X 1.0 specification for example 05.13, carries no
+# third-party terms and travels under this package's own MIT licence. Its head
+# says so, which is where the next reader will look.
 #
 # examples/assets/fonts/adobe-standard-14 is the opposite case, and it is not
 # a licence that is unsettled but one that is settled the other way. Those are

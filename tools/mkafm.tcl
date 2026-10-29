@@ -133,6 +133,44 @@ proc readAfm {path} {
   return [list $widths $codes $header]
 }
 
+# --- Adobe's terms ---------------------------------------------------------
+#
+# The AFM files may be used and distributed "provided that all copyright
+# notices are retained; ... that all modifications to this file or any of the
+# AFM files are prominently noted in the modified file(s); and that this
+# paragraph is not modified". afmData.tcl is such a modified file and ships in
+# every installation, so its header carries the paragraph, the copyright and
+# trademark notices of the AFM files, and a note of the conversion.
+#
+# The paragraph and the notices are written out here word for word, from
+# examples/assets/fonts/adobe-afm/LICENSE.txt (lines 31-38 and 43-47), rather
+# than read from that file at run time: the generator reads only the AFM
+# directory it is given, and the notice must not change with a stray edit to
+# a README.
+#
+# The date of the conversion note is fixed for the same reason the version
+# below is: two runs of the generator must produce the same file, byte for
+# byte - tests/release.test compares modules against released ones. It is
+# raised by hand when the conversion itself changes.
+set modified 2026-10-29
+
+set adobeTerms {
+  {This file and the 14 PostScript(R) AFM files it accompanies may}
+  {be used, copied, and distributed for any purpose and without charge,}
+  {with or without modification, provided that all copyright notices}
+  {are retained; that the AFM files are not distributed without this}
+  {file; that all modifications to this file or any of the AFM files}
+  {are prominently noted in the modified file(s); and that this}
+  {paragraph is not modified. Adobe Systems has no responsibility}
+  {or obligation to support the use of the AFM files.}
+  {}
+  {Copyright (c) 1985, 1987, 1988, 1989, 1990, 1991, 1992, 1993,}
+  {1997 Adobe Systems Incorporated. All Rights Reserved.}
+  {Helvetica and Times are trademarks of Linotype-Hell AG and/or}
+  {its subsidiaries. ITC Zapf Dingbats is a registered trademark}
+  {of International Typeface Corporation.}
+}
+
 # --- emit -----------------------------------------------------------------
 
 puts "#"
@@ -146,10 +184,21 @@ puts "# See the file \"license.terms\" for information on usage and redistributi
 puts "# of this file (MIT License)."
 puts "#"
 puts "# GENERATED - do not edit. Produced by tools/mkafm.tcl from the original"
-puts "# Adobe AFM files (StartFontMetrics 4.1, Copyright (c) 1985-1997 Adobe"
-puts "# Systems Incorporated). Rerun the generator instead of correcting a"
-puts "# number here; a hand-fixed value would be lost on the next run and would"
-puts "# no longer match its source."
+puts "# Adobe AFM files (StartFontMetrics 4.1). Rerun the generator instead of"
+puts "# correcting a number here; a hand-fixed value would be lost on the next"
+puts "# run and would no longer match its source."
+puts "#"
+puts "# MODIFIED FROM THE ADOBE AFM FILES: the widths and font descriptor values"
+puts "# below were extracted from the 14 Core AFM files and converted into Tcl"
+puts "# tables by tools/mkafm.tcl, $modified. Nothing else of the AFM files is"
+puts "# contained here; the files themselves, with Adobe's MustRead.html, ship"
+puts "# in the source archive under examples/assets/fonts/adobe-afm/."
+puts "#"
+puts "# The AFM files are distributed by Adobe under the following terms:"
+puts "#"
+foreach line $adobeTerms {
+  puts [string trimright "#   $line"]
+}
 puts "#"
 puts "# Widths are in 1/1000 of the em square, indexed by byte value under"
 puts "# WinAnsiEncoding - except Symbol and ZapfDingbats, which are indexed by"
@@ -253,5 +302,5 @@ foreach font $fonts {
 # The number is written out here rather than read from anywhere: a module
 # version is raised by the author, deliberately, and a generator that guessed
 # it would raise it behind their back.
-puts "package provide tclpdf::afmData 1.2"
+puts "package provide tclpdf::afmData 1.3"
 

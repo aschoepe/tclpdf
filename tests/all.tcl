@@ -7,8 +7,13 @@
 # Copyright (c) 1998-1999 by Scriptics Corporation.
 # Copyright (c) 2000 by Ajuba Solutions
 #
-# See the file "license.terms" for information on usage and redistribution
-# of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+# See the file "tclconfig/license.terms" for information on usage and
+# redistribution of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+#
+# This file came with the TEA sample extension and is under the Tcl/Tk
+# licence, whose text tclconfig/license.terms holds unchanged. The
+# "license.terms" at the top of this tree is tclpdf's own MIT licence and
+# covers the changes made here, not the file it started from.
 
 package prefer latest
 package require Tcl 8.6-

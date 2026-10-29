@@ -9,10 +9,32 @@
 # of this file (MIT License).
 #
 # GENERATED - do not edit. Produced by tools/mkafm.tcl from the original
-# Adobe AFM files (StartFontMetrics 4.1, Copyright (c) 1985-1997 Adobe
-# Systems Incorporated). Rerun the generator instead of correcting a
-# number here; a hand-fixed value would be lost on the next run and would
-# no longer match its source.
+# Adobe AFM files (StartFontMetrics 4.1). Rerun the generator instead of
+# correcting a number here; a hand-fixed value would be lost on the next
+# run and would no longer match its source.
+#
+# MODIFIED FROM THE ADOBE AFM FILES: the widths and font descriptor values
+# below were extracted from the 14 Core AFM files and converted into Tcl
+# tables by tools/mkafm.tcl, 2026-10-29. Nothing else of the AFM files is
+# contained here; the files themselves, with Adobe's MustRead.html, ship
+# in the source archive under examples/assets/fonts/adobe-afm/.
+#
+# The AFM files are distributed by Adobe under the following terms:
+#
+#   This file and the 14 PostScript(R) AFM files it accompanies may
+#   be used, copied, and distributed for any purpose and without charge,
+#   with or without modification, provided that all copyright notices
+#   are retained; that the AFM files are not distributed without this
+#   file; that all modifications to this file or any of the AFM files
+#   are prominently noted in the modified file(s); and that this
+#   paragraph is not modified. Adobe Systems has no responsibility
+#   or obligation to support the use of the AFM files.
+#
+#   Copyright (c) 1985, 1987, 1988, 1989, 1990, 1991, 1992, 1993,
+#   1997 Adobe Systems Incorporated. All Rights Reserved.
+#   Helvetica and Times are trademarks of Linotype-Hell AG and/or
+#   its subsidiaries. ITC Zapf Dingbats is a registered trademark
+#   of International Typeface Corporation.
 #
 # Widths are in 1/1000 of the em square, indexed by byte value under
 # WinAnsiEncoding - except Symbol and ZapfDingbats, which are indexed by
@@ -306,4 +328,4 @@ set ::tclpdf::afmData::widths(ZapfDingbats) {
 }
 set ::tclpdf::afmData::descriptor(ZapfDingbats) {FontBBox {-1 -143 981 820} CapHeight 0 XHeight 0 Ascender 0 Descender 0 ItalicAngle 0 StdVW 90 UnderlinePosition -100 UnderlineThickness 50 Flags 4}
 
-package provide tclpdf::afmData 1.2
+package provide tclpdf::afmData 1.3

@@ -92,4 +92,4 @@ foreach line $lines {
       point it does not list, so the absence is the answer and not a gap.
     } \
     -ranges [::ucd::merge $ranges] \
-    -version 1.0
+    -version 1.1

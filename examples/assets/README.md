@@ -49,9 +49,9 @@ embeds one of their own — which is why tclpdf reads `fsType` and reports it.
 
 **Adding an asset means checking that side too:** an example is worth nothing
 if the file it needs may not be redistributed. The two ZUGFeRD invoices below
-are the standing example of how to answer that — the terms turned out to be
-inside the files themselves, so they travel in the source archive like
-everything else here.
+are the standing example of where the answer can stand — they are FeRD
+sample files, and the FeRD terms of use are inside the files themselves, so
+they travel in the source archive wherever the files go.
 
 ---
 
@@ -187,11 +187,11 @@ The SVG uses `circle`, `clipPath`, `defs`, `g`, `linearGradient`, `path`,
 decide whether SVG support is worth building: gradients map onto shading types
 2 and 3, `clipPath` onto `W n`, and `text` is the one that needs a font.
 
-`erika-mustermann.jpg` is the portrait from the same specimen — the passport photograph of the identity card of the Personalausweisverordnung, published by the Bundesministerium des Innern and in the public domain on the same grounds as the signature. Two things about it are worth knowing rather than assuming. It carries an ICC profile, so it exercises a code path the other JPEGs do not: `image embed` keeps the profile and writes `/ICCBased` instead of `/DeviceRGB`. And the sources disagree about who is in the picture: Wikimedia Commons calls the person fictitious, while the Wikipedia article on the name states that the photographs on these specimens show actual employees of the Bundesdruckerei. Nothing follows from that for the licence — an official work stays an official work — but a specimen portrait is not the place for the assumption that nobody is depicted.
+`erika-mustermann.jpg` is the portrait from the same specimen — the passport photograph of the identity card of the Personalausweisverordnung, published by the Bundesministerium des Innern and in the public domain on the same grounds as the signature. Two things about it are worth knowing rather than assuming. It carries an ICC profile, so it exercises a code path the other JPEGs do not: `image embed` keeps the profile and writes `/ICCBased` instead of `/DeviceRGB`. And the sources disagree about who is in the picture: Wikimedia Commons calls the person fictitious, while the Wikipedia article on the name states that the photographs on these specimens show actual employees of the Bundesdruckerei. Nothing follows from that for the licence — an official work stays an official work — but a specimen portrait is not the place for the assumption that nobody is depicted. The picture is the official specimen as the authorities publish and circulate it, unchanged; the author decided on 2026-10-29 to keep using it here.
 
 `signature-mustermann.svg` is the signature of Erika Mustermann as it stands on the German identity card specimen — traced from the artwork of the Personalausweisverordnung of 1 November 2010 into filled paths. That artwork is part of an official regulation and therefore in the public domain under section 5 paragraph 1 of the German copyright act; Wikimedia Commons carries the specimen on the same grounds. Erika Mustermann is the placeholder person of German official documents and has been since 1983 — the name is a convention, not a person, and the signature is a specimen, not anyone's mark. It is a drawing here, not a photograph of a document: the file holds paths, so `examples/08.02-signature-visible.tcl` puts real vectors into the appearance stream of its signature field.
 
-`Tcl9logo.svg` is the **logo of the Tcl project**, not a drawing made here — it is what `00.02-hello-world-svg.tcl` puts on the page, that example being the shortest program in the tree that draws a picture at all. Origin: the logo for Tcl/Tk 9.0, designed by Valerie Carroll (Carroll Graphics) in consultation with Steve Landers; the SVG is the one published at <https://cmacleod.me.uk/tcl/logo/>, unchanged. Terms: the Tcl wiki page that introduced it, <https://wiki.tcl-lang.org/page/A+logo+for+Tcl+9>, states "same license as Tcl" — the Tcl/Tk licence, <https://www.tcl-lang.org/software/tcltk/license.html>, a BSD-style licence that permits redistribution with its notice; no separate licence file ships with the logo, so none is copied here. The picture is used as the logo of the project whose language this package is written in, and nothing about it is claimed as this project's work.
+`Tcl9logo.svg` is the **logo of the Tcl project**, not a drawing made here — it is what `00.02-hello-world-svg.tcl` puts on the page, that example being the shortest program in the tree that draws a picture at all. Origin: the logo for Tcl/Tk 9.0, designed by Valerie Carroll (Carroll Graphics) in consultation with Steve Landers; the SVG is the one published at <https://cmacleod.me.uk/tcl/logo/>, unchanged. Terms: the Tcl wiki page that introduced it, <https://wiki.tcl-lang.org/page/A+logo+for+Tcl+9>, states "same license as Tcl" — the Tcl/Tk licence, <https://www.tcl-lang.org/software/tcltk/license.html>, a BSD-style licence that permits redistribution with its notice; no separate licence file ships with the logo, and the Tcl/Tk licence text that covers it lies in `tclconfig/license.terms`, copied unchanged from a Tcl installation. The picture is used as the logo of the project whose language this package is written in, and nothing about it is claimed as this project's work.
 
 **None of the six PNGs is interlaced** — read out of byte 13 of each `IHDR`, all zero. That is intentional: an interlaced PNG cannot be passed through and would have to be decoded and re-encoded, which is a different feature and not one stage 3 claims.
 
@@ -217,18 +217,9 @@ because the original names say nothing about what distinguishes them.
 
 **`order-x-comfort.xml` is the other case and carries no third-party terms.** It is not a copy of a published sample: it was written for this project against the Order-X 1.0 specification (Cross Industry Order, SCRDM CIO D20B), and the order it states is invented — the same order the page of `05.13` shows, which is the point of a hybrid document. It travels under the MIT licence of tclpdf like every other file written here; its own head says so.
 
-**Licence: settled, and it travels inside the files.** There is no licence file
-beside the examples in the FeRD distribution because there does not need to be:
-each invoice carries the FeRD terms as an XML comment in its own head —
-measured, **5 708 of the 7 929 bytes** in the MINIMUM file, 72 per cent of it.
-Those terms grant free, irrevocable use of the data format including
-redistribution, further development and commercial products.
+**Licence: the FeRD terms of use, and they travel inside the files.** The two invoices are FeRD sample files from the ZUGFeRD distribution published at <https://www.ferd-net.de>, and the terms of use of the Forum elektronische Rechnung Deutschland (FeRD) apply to them. There is no licence file beside the examples in that distribution: each invoice carries the FeRD terms as an XML comment in its own head — measured, **5 708 of the 7 929 bytes** in the MINIMUM file, 72 per cent of it. Those terms grant free, irrevocable use of the data format, its further development and its combination with other products; they do not speak of passing on the sample files as such, so the files are kept here as FeRD publishes them, with that block.
 
-**The block must not be stripped.** It is what makes these files
-redistributable, and tclpdf embeds the XML byte for byte, so it reaches every
-PDF built from them. When writing your OWN invoices, do not reproduce it: it
-belongs to the sample file, not to the format, no schema asks for it, and at a
-MINIMUM profile it would be most of the document.
+**The block must not be stripped.** It states the terms the files are used under, and tclpdf embeds the XML byte for byte, so it reaches every PDF built from them. When writing your OWN invoices, do not reproduce it: it belongs to the sample file, not to the format, no schema asks for it, and at a MINIMUM profile it would be most of the document.
 
 The version in each head is the one the sample was cut from — `2.4.0` for
 MINIMUM and `2.5.0` for EN 16931 — not the `2.5.2` of the distribution they

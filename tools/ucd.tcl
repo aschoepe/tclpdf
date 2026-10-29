@@ -30,6 +30,11 @@
 #
 
 namespace eval ::ucd {
+  # The licence of the data files, beside them in tools/ucd/. Read once,
+  # when a generator sources this library: see [write] for why its text
+  # goes into every generated module.
+  variable licence [file join [file dirname [file normalize [info script]]] \
+      ucd LICENSE]
 }
 
 # The generator's own name, for messages: mkbidi.tcl fails as "mkbidi:", not
@@ -180,6 +185,32 @@ proc ::ucd::merge {ranges} {
   return $merged
 }
 
+# The lines of tools/ucd/LICENSE, the Unicode License v3, without the blank
+# lines at its end. The licence permits use of the data files "provided that
+# either (a) this copyright and permission notice appear with all copies of
+# the Data Files or Software, or (b) this copyright and permission notice
+# appear in associated Documentation". A generated module is such a copy, and
+# it ships where tools/ucd/ does not - in every installation and in the
+# binary archive - so (a) is met in its own header, not by a pointer to a
+# file the installation lacks.
+#
+# Read from the file rather than written out here so that the text exists
+# once; a missing file fails the run like a missing source does. Its one
+# character outside ASCII, the copyright sign, is written as "(C)": every
+# module of the package is plain ASCII, so that Tcl 8.6 reads it the same
+# under any system encoding and a generator run compares equal to the file
+# whatever encoding its stdout has.
+proc ::ucd::licence {} {
+  variable licence
+  if {[catch {open $licence r} channel]} {
+    fail "cannot read the Unicode licence: $channel"
+  }
+  fconfigure $channel -encoding utf-8
+  set text [string trimright [::read $channel]]
+  close $channel
+  return [split [string map [list \u00A9 (C)] $text] \n]
+}
+
 # Write the generated module to stdout: the header, the table, the package
 # line. Options, all required:
 #
@@ -228,6 +259,15 @@ proc ::ucd::write {args} {
   puts "# version ${-edition}, (C) Unicode, Inc. Rerun the generator instead of correcting"
   puts "# an entry here; a hand-fixed value would be lost on the next run and"
   puts "# would no longer match its source - tests/${-test} compares the two."
+  puts "#"
+  puts "# The table is derived from Unicode data files, which Unicode, Inc."
+  puts "# licenses under the Unicode License v3 (SPDX: Unicode-3.0). Its"
+  puts "# copyright and permission notice follows, as the licence asks of every"
+  puts "# copy; the text lies beside the source as tools/ucd/LICENSE."
+  puts "#"
+  foreach line [licence] {
+    puts [string trimright "#   $line"]
+  }
   puts "#"
   foreach line [split [string trim ${-notes}] \n] {
     puts "# [string trim $line]"

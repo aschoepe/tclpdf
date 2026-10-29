@@ -56,8 +56,7 @@ and without a Reserved Font Name nothing here has to be renamed. All four
 licence files are kept anyway, because the choice belongs to whoever receives
 the files, not to whoever passed them on.
 
-Measured, not assumed: `fsType` is **8** in all fourteen - editable embedding,
-no restriction that would stand in the way.
+Measured, not assumed (fontTools, 2026-10-29): `fsType` is **8** (editable embedding) in thirteen of the `.ttf` files and **4** (preview and print embedding) in thirteen of the `.otf` files; `D050000L.ttf` and `D050000L.otf` carry **0** (installable embedding). None of these values stands in the way of embedding a subset in a PDF.
 
 ## Why fourteen and not thirty-eight
 

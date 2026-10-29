@@ -517,8 +517,9 @@ proc ::tclpdf::hyphenate::Parse {channel start} {
   set patternsFrom $start
   while {[gets $channel line] >= 0} {
     set line [string trim $line]
-    # "%" is the TeX comment character and "#" the one the German file uses;
-    # libhyphen accepts both, and so does this.
+    # "%" is the TeX comment character and "#" the one the German file uses.
+    # libhyphen itself skips only "%" lines (hyphen.c, hnj_hyphen_load_file);
+    # this reader accepts both, so a "#" line is not taken for a pattern.
     if {$line eq {} || [string index $line 0] in {% #}} {
       continue
     }
@@ -1001,4 +1002,4 @@ proc ::tclpdf::hyphenate::Pieces {data string} {
   return $pieces
 }
 
-package provide tclpdf::hyphenate 1.4
+package provide tclpdf::hyphenate 1.5
