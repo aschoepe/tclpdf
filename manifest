@@ -1,6 +1,6 @@
-C Licence\snotices\safter\sthe\saudit,\spart\stwo:\sthe\spandoc\stemplate\sand\sOCR\sA\n\n-\sdoc/tclpdf-default.html\snames\spandoc's\sdefault\stemplate\sit\sderives\sfrom,\swith\sJohn\sMacFarlane's\scopyright\sand\sthe\sBSD-3-Clause\stext,\sin\sa\scomment\sthat\sreaches\sthe\sgenerated\sHTML\smanual\n-\sOCR-LICENSE.txt\squotes\sRichard\sB.\sWales'\sterms\sfor\sthe\sOCR\sA\sbase,\sthe\sthird\sstatement\sit\shad\sannounced;\sthe\sasset\sREADME\snames\sthe\sno-fee\sclause\n-\sexamples/assets/README.md:\sthe\sorigin\stable\scarries\sthe\sfonts'\sown\scopyright\syears\sand\srows\sfor\sArimo,\sPermanent\sMarker\sand\sthe\sNoto\sfaces\n-\sknowingly\sopen:\sthe\sNoto\sColor\sEmoji\slicence\sfile\ssays\s2021,\sthe\sfont\s2022,\snot\scompared\sagainst\supstream
-D 2026-11-01T09:52:22.371
-F Makefile.in 1f1499791abc8cc020908cbab6fd93df7f871217e3fce31134a63c47cc29f885
+C Makefile.in\skeeps\sthe\sTEA\scopyright\snotices\n\n-\sthe\sheader\scarries\sthe\sScriptics\sand\sActiveState\slines\sof\sthe\sTEA\ssample\sit\sderives\sfrom,\spointing\sat\stclconfig/license.terms
+D 2026-11-01T10:16:14.165
+F Makefile.in d91f5766c7267c53141b153feddddf9197a5bf92cdf5ab10a12126ba0e1fc13d
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
 F afm.tcl ae1b533f335e9bcd2a61e118f2b2200070aff50dafc0480fb296297b1c4eb968
@@ -518,8 +518,8 @@ F xObject.tcl 2ffa2c84399095f4fb229b8ab06fc9d14be40da764e9788c1b5f3c90cbb81951
 F xml.tcl b5d29939054a07f376f34f801e2f8fe240bdc50225bc2552289d548d912d6111
 F xmp.tcl 06650fcfafd13f8e1391b6e6df2a85e5cacec39459fdec1f8ff7edb7076b72ba
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 0318611fc387af457214d31e9d64848b932111263f9b84f2e39cd3dc8bfd12fe
-R 76798124d6729c1c2d4f83d0fe9bde53
+P 9a0e7abc29fdd2b9ac515d542644ec78c3ef7985083aa5e3335429449ce68759
+R ef164cbe4d1221a0625ee2343445a61f
 U alex
-Z 0857b702964d1ec12ae2bda054180a4b
+Z ae1e5aa792b7876bb17e58a3d805ae5b
 # Remove this line to create a well-formed Fossil manifest.

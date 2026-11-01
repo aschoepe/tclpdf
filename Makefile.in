@@ -7,6 +7,12 @@
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
+# This file came with the TEA sample extension and keeps its notices:
+# Copyright (c) 1999 Scriptics Corporation.
+# Copyright (c) 2002-2005 ActiveState Corporation.
+# See the file "tclconfig/license.terms" for information on usage and
+# redistribution of the TEA parts, and for a DISCLAIMER OF ALL WARRANTIES.
+#
 
 #========================================================================
 # Nothing of the variables below this line need to be changed.
