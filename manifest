@@ -1,5 +1,5 @@
-C Version\s1.7.1\n\n-\sconfigure.ac\sand\stclpdf.tcl\scarry\s1.7.1,\sthe\smanual\ssynopsis\sfollows;\sconfigure\sregenerated\sby\sautoconf
-D 2026-10-29T10:50:44.090
+C Licence\snotices\safter\sthe\saudit,\spart\stwo:\sthe\spandoc\stemplate\sand\sOCR\sA\n\n-\sdoc/tclpdf-default.html\snames\spandoc's\sdefault\stemplate\sit\sderives\sfrom,\swith\sJohn\sMacFarlane's\scopyright\sand\sthe\sBSD-3-Clause\stext,\sin\sa\scomment\sthat\sreaches\sthe\sgenerated\sHTML\smanual\n-\sOCR-LICENSE.txt\squotes\sRichard\sB.\sWales'\sterms\sfor\sthe\sOCR\sA\sbase,\sthe\sthird\sstatement\sit\shad\sannounced;\sthe\sasset\sREADME\snames\sthe\sno-fee\sclause\n-\sexamples/assets/README.md:\sthe\sorigin\stable\scarries\sthe\sfonts'\sown\scopyright\syears\sand\srows\sfor\sArimo,\sPermanent\sMarker\sand\sthe\sNoto\sfaces\n-\sknowingly\sopen:\sthe\sNoto\sColor\sEmoji\slicence\sfile\ssays\s2021,\sthe\sfont\s2022,\snot\scompared\sagainst\supstream
+D 2026-11-01T09:52:22.371
 F Makefile.in 1f1499791abc8cc020908cbab6fd93df7f871217e3fce31134a63c47cc29f885
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -41,7 +41,7 @@ F doc/claude/skills/tclpdf-tcl/reference/10-pdfa-zugferd.md 6f89ea60debe14e0e025
 F doc/claude/skills/tclpdf-tcl/reference/11-encryption-signatures.md 7bd44de0356d75bcaa4c8f80d6e6adf543e7ed04c601a3eeb56c637abf306468
 F doc/claude/skills/tclpdf-tcl/reference/12-import-update-info.md 104bdf7b603f2632a1cd17a5fd71717aeb4489ef7bd0e1b3eae5f24796bb72a0
 F doc/claude/skills/tclpdf-tcl/reference/13-form-fields.md d6dd58f4f6d4f250c4875e5bc13593cefa9625bc5d0f0773f70fbe5c79d34686
-F doc/tclpdf-default.html 0e6286737d49ee7f9437c05d24f760309ea7aff341be882b45380830c2be7500
+F doc/tclpdf-default.html b543496816ce1ebbc250ce38eb1672a0a58cee20f635b1bd0d739a651a4cbe55
 F doc/tclpdf.md c5c9c29f72f730dfbef1c0f68a643ce653160c816bf21cbe383df600c5957d1a
 F document.tcl 2cddf5b04129044d711ccaadc5087108e8c19f0b3b3b2459291e88bb0ce2d5b0
 F encrypt.tcl 8137afb09bf8f0548ab8220feae2ee49980eedf1b47c1eba8226cb91f4dc6662
@@ -134,7 +134,7 @@ F examples/09.03-form-read.tcl 1ae018461b2c8cec69983cc0d212d9bb56ae9d00bbb2a5e91
 F examples/09.04-form-design.tcl d00382e3b8447eed27238790fbec1a7cd94a22c92c5f012bf578e3127204657d
 F examples/10.01-annotations.tcl 255380a6c45069d75c4e0bc2d43b4934c43151dd527d0897b39e51fab648b289
 F examples/11.01-tk-canvas.tcl be60da9d7b7493a9c5b1ec56c45558c69dbd0a6fb64d3843171fdcbfd5b97f62
-F examples/assets/README.md 61a2ad5084525975aaecf60227dd488d35041e50f910a92c2a5104e19cbf8b6c
+F examples/assets/README.md 2e7210d97a20a1b233bad048255a06574a3b9a052862bcaa39883a2ecfff97d7
 F examples/assets/fonts/DejaVuSans-Bold.ttf 831aa9bf9d7471e7335fc65f51b594d4f4436f27cb5ad4e1528151f417d2baf2
 F examples/assets/fonts/DejaVuSans.ttf 18ff05f4603ee3dfaf51c260367c5a3335c81fe0d3342640ba3b6ce4149496ef
 F examples/assets/fonts/adobe-afm/Courier-Bold.afm b1673a3770494034b259fac1b558ae1976aa75df03b5430ff8ecd395842f4c3c
@@ -203,7 +203,7 @@ F examples/assets/fonts/licenses/NotoSansJP-OFL.txt 76a29a179147683a4d8ed636a166
 F examples/assets/fonts/licenses/NotoSansSymbols-OFL.txt 1f40fc67785224cda4ef396a861f25589bb7caebd08c79fe1ef6ecbca5035728
 F examples/assets/fonts/licenses/NotoSansSymbols2-OFL.txt 1f40fc67785224cda4ef396a861f25589bb7caebd08c79fe1ef6ecbca5035728
 F examples/assets/fonts/licenses/NotoSerifTibetan-OFL.txt 00887dc1a1de3bcb6a0a53f6850329aefbd8504d870353229dd9e0767c02965f
-F examples/assets/fonts/licenses/OCR-LICENSE.txt e570783cda2a7b049d2e11485c33eede1618dc5d165313b5047e0f051392a545
+F examples/assets/fonts/licenses/OCR-LICENSE.txt 1e73712c0e3ccc05d762265dd8569729efb90cfca59a91ca2d379997aabc8a1c
 F examples/assets/fonts/licenses/PermanentMarker-LICENSE.txt dab9cd0c5ffdfc7bedf0b4a387c3c8d418e67d3e9dd38cd5bf6465390d1220a1
 F examples/assets/fonts/licenses/Roboto-OFL.txt ce62f9aa575d4ecf579557e3e51530cdab7f5970b960b0b6563ef2f85b9d29c1
 F examples/assets/fonts/tsukurimashou/OCRA.afm 61112f2d643a2d34ad1c8f69722cf7dee884afc7cc4673efeb4278c7d74edf96
@@ -518,8 +518,8 @@ F xObject.tcl 2ffa2c84399095f4fb229b8ab06fc9d14be40da764e9788c1b5f3c90cbb81951
 F xml.tcl b5d29939054a07f376f34f801e2f8fe240bdc50225bc2552289d548d912d6111
 F xmp.tcl 06650fcfafd13f8e1391b6e6df2a85e5cacec39459fdec1f8ff7edb7076b72ba
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 7df120b5e76992ce881c25d47d81a09192c5911b04e2bae0834b193462db1c7f
-R e528733d45f68474183e7e4ea6dbb9c7
+P 0318611fc387af457214d31e9d64848b932111263f9b84f2e39cd3dc8bfd12fe
+R 76798124d6729c1c2d4f83d0fe9bde53
 U alex
-Z 7d8a239eba456ac363f70580d82d4e04
+Z 0857b702964d1ec12ae2bda054180a4b
 # Remove this line to create a well-formed Fossil manifest.

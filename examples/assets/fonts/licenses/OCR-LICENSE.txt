@@ -48,10 +48,34 @@ summarised, because each author is careful about what they do and do not say.
    fonts, then you must retain a lawyer. I will no longer answer email
    queries on this subject.
 
-3. The shapes themselves are standards: OCR B goes back to Adrian Frutiger
-   and a DIN standard, OCR A to ANSI X3.17-1977. Neither Schwarz nor Skala
-   claims to speak for those, and both say so in the text above. What is
-   released here is the digitisation.
+3. OCR A — Richard B. Wales, UCLA, from the head of his Metafont source
+   ocr.mf (CTAN fonts/ocr-a/ocr.mf, https://ctan.org/pkg/ocr-a), repeated
+   word for word in msk-ocra.mp of the package above, where Skala prefaces
+   it: "I, Matthew Skala, release my work on this to the public domain.
+   However, the copyright notice below, from the METAFONT code I used as a
+   source, may be applicable."
+
+     (C) Copyright 1988, 1989 Richard B. Wales.  All Rights Reserved.
+
+     [...]
+
+     Terms of copyright:
+
+        You may do anything you wish with this font definition, as
+        long as you retain the original copyright notice and credit
+        information intact in the source, and do not charge any fee
+        for distribution of either the source or any fonts derived
+        from it beyond a reasonable copying or communications charge.
+
+   Wales names Tor Lillqvist, Technical Research Centre of Finland, as the
+   author of the earlier version his work is based on. Lillqvist's own
+   ocr-a.mf, also on CTAN, carries no terms of its own, and no statement
+   from him has been found.
+
+Note: the shapes themselves are standards: OCR B goes back to Adrian
+Frutiger and a DIN standard, OCR A to ANSI X3.17-1977. Neither Schwarz nor
+Skala claims to speak for those, and both say so in the text above. What is
+released here is the digitisation.
 
 Not included, and why:
 

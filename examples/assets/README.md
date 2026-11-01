@@ -64,7 +64,7 @@ licence question has one place to look:
 | --- | --- | --- |
 | `fonts/` itself | DejaVu Sans, regular and bold — the face most tests and examples reach for first, kept flat for the short path | Bitstream Vera licence, `licenses/DejaVu-*` |
 | `google/` | the Google Fonts faces: Roboto (static and variable), Arimo (variable, the Arial metrics — example 03.04 embeds it under the alias the barcode encoder asks for), Bitcount Prop Single (static and variable), Niconne, Permanent Marker, and eleven Noto faces — the ten of example 02.09 (Sans, Sans JP, Serif Tibetan, Sans Symbols, Sans Symbols 2, Emoji, Sans Cuneiform, Sans Egyptian Hieroglyphs, Naskh Arabic, Music) plus **Noto Color Emoji** for example 02.18 — 43.2 MB, of which 18.1 MB travel | SIL Open Font License 1.1 (Permanent Marker: Apache 2.0), one text per family in `licenses/` |
-| `tsukurimashou/` | OCR A and OCR B, each as `.ttf`, `.otf`, `.pfb` and `.afm`, from the OCR package of the Tsukurimashou Project | public domain and free-use statements of the three authors, quoted in `licenses/OCR-LICENSE.txt` |
+| `tsukurimashou/` | OCR A and OCR B, each as `.ttf`, `.otf`, `.pfb` and `.afm`, from the OCR package of the Tsukurimashou Project | public domain and free-use statements of the three authors, quoted in `licenses/OCR-LICENSE.txt`; Richard B. Wales's terms for OCR A allow anything as long as his notice and credits stay intact and no fee is charged for distribution beyond a reasonable copying or communications charge — handing out the source archive free of charge is covered, selling it is not |
 | `urw-core35-fonts/` | the fourteen URW faces that stand in for the standard 14, in four formats, with their own `NOTICE.md` and licence texts | OFL 1.1 chosen of three |
 | `liberation-fonts/` | Liberation Sans, Serif and Mono, four styles each (release 2.1.5) — metric copies of Arial, Times New Roman and Courier New, the second free stand-in for the standard 14; own `NOTICE.md` with origin, hash and the measurement (2255 of 2292 advances equal to the AFM) | SIL OFL 1.1, `LICENSE` beside them |
 | `adobe-afm/` | the fourteen Adobe core font metrics — build input, not example data, see below | Adobe's AFM grant, `LICENSE.txt` beside them |
@@ -118,11 +118,14 @@ refuse on it.
 | --- | --- | --- |
 | DejaVu | <https://github.com/dejavu-fonts/dejavu-fonts/releases> | Bitstream Vera (c) 2003 Bitstream Inc., Arev glyphs (c) Tavmjong Bah, DejaVu's own changes public domain |
 | Roboto | Google Fonts, `googlefonts/roboto-classic` | **OFL 1.1**, (c) 2011 The Roboto Project Authors — no reserved font name |
-| Bitcount Prop Single | Google Fonts, `petrvanblokland/TYPETR-Bitcount` | **OFL 1.1**, (c) 1980 The Bitcount Project Authors — no reserved font name |
+| Bitcount Prop Single | Google Fonts, `petrvanblokland/TYPETR-Bitcount` | **OFL 1.1**, (c) 2024 The Bitcount Project Authors (name ID 0, both files) — no reserved font name; `licenses/BitcountPropSingle-OFL.txt` says 1980, which is the upstream wording (`google/fonts` `ofl/bitcountpropsingle/OFL.txt`, the same in TYPETR-Bitcount) and is kept as it is |
+| Arimo | Google Fonts, `googlefonts/arimo` | **OFL 1.1**, (c) 2020 The Arimo Project Authors (name ID 0) — no reserved font name; `licenses/Arimo-OFL.txt` says 2026, byte for byte the upstream file (`google/fonts` `ofl/arimo/OFL.txt`), and is kept as it is |
 | Niconne | Google Fonts | **OFL 1.1**, (c) 2011 Vernon Adams — **reserved font name**, spelt `Niconne` in the font (name ID 0) and `Nicone` in the licence text beside it |
+| Permanent Marker | Google Fonts | **Apache 2.0**, (c) 2010 Font Diner, Inc. (name ID 0) — `licenses/PermanentMarker-LICENSE.txt` is the bare licence text; the copyright line is the font's own |
+| Noto | Google Fonts, `notofonts` | **OFL 1.1**, as name ID 0 gives it: (c) 2022 The Noto Project Authors for Sans, Serif Tibetan, Sans Symbols, Sans Symbols 2, Sans Cuneiform, Sans Egyptian Hieroglyphs, Naskh Arabic and Music; (c) 2013 Google LLC for Noto Emoji; (c) 2014-2021 Adobe for Noto Sans JP, with the **reserved font name** `Source`; (c) 2022 Google Inc. for Noto Color Emoji, whose licence text says 2021 — one text per face in `licenses/` |
 
-All four permit redistribution as part of a larger package, which is this
-case, and all four require the notices to travel along. That is what
+All of them permit redistribution as part of a larger package, which is this
+case, and all of them require the notices to travel along. That is what
 `licenses/` is for, and it must not be tidied away.
 
 > **Both spellings are in the tree, and that is the upstream state.** `licenses/Niconne-OFL.txt:2` reserves `Nicone`; the font's own copyright string (`name` ID 0, read with `ttx -t name`) reserves `Niconne`, which is also its family name (IDs 1 and 4) and the name a subset carries into a PDF. Neither file is edited here — a licence text is quoted, not corrected.
