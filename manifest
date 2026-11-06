@@ -1,5 +1,5 @@
-C Read\snumeric\soptions\swith\sa\sleading\szero\sin\sdecimal\sunder\sTcl\s8.6\sand\sTcl\s9\n\n-\spdfObj:\snew\sreader\sdecimal\s-\sa\splain\sdecimal\sliteral\sloses\sthe\sleading\szeros\sof\sits\sinteger\spart,\severything\selse\s(0x1A,\s0o17,\sNaN,\s1e3,\swords)\spasses\sthrough\sunchanged;\snum\sand\swritten\sread\sthrough\sit\n-\soption:\spoint,\snumber\sand\szoom\sread\sin\sdecimal\sand\sreturn\sthe\svalue\sread;\snew\shelper\sdecimals\sreads\sthe\snumbers\sof\san\soptions\sdictionary,\snested\slists\sincluded\n-\sgeometry:\stoPoints\sand\scheck\sread\sin\sdecimal,\scheck\sreturns\sthe\smatrix\sread\n-\sinteger\soptions\sread\sin\sdecimal\sat\stheir\scheck:\s-page,\s-face,\s-index,\s-total,\s-from/-start,\s-maxlen,\s-left/-right/-min,\s-axes,\s-numCopies,\s-part,\s-rotate\sand\sthe\soptions\sof\ssign,\stimestamp,\sstructure\sand\stype3\n-\spage:\sbox\sreturns\sthe\sbox\sas\sread;\stext:\sTextCheck\sreturns\sthe\svalue\sread\sand\sfont/TextMerge\skeep\sit\n-\sfont,\scolorFont:\sthe\sFACE\serror\scodes\squote\sthe\svalue\sas\swritten\n-\sminimum\sversions\sraised\swhere\sa\scaller\srelies\son\sthe\snew\sreading\s(geometry\s1.8-,\soption\s1.4-,\spdfObj\s1.9-,\sdocument\s1.17-,\sfield\s1.4-,\stableLayout\s1.11-,\sfont\s1.20-,\stype3\s1.5-);\s41\smodules\sraised\sby\s0.1,\spkgIndex.tcl.in\sfollows\n-\stests/decimal.test\snew;\sexamples/00.04-leading-zeros.tcl\snew\s-\sthe\ssame\spage\sdrawn\swith\sand\swithout\sleading\szeros,\scontent\scompared\n-\smanual:\sone\ssentence\sunder\sCoordinates\sand\sunits\n-\snot\sin\sthis\schange:\scolour\scomponents,\snumbers\sread\sfrom\sforeign\sPDFs,\sSVG,\sfont\sand\shyphenation\sfiles,\sand\sthe\stext\scomparisons\son\sDocMDP\s/P,\s/EarlyChange,\s/BitsPerComponent\sand\soverprint\s-mode
-D 2026-11-06T21:56:23.004
+C Cheaper\sleading-zero\sreading\son\sthe\shot\spaths\n\n-\sgeometry\stoPoints,\soption\snumber,\spage\sPageIndex,\spdfObj\snum\sand\stext\sTextCheck\scall\sthe\sdecimal\sreader\sonly\sfor\sa\svalue\sthat\sbegins\swith\sa\szero\sand\sa\sdigit\n-\soption\sdecimals\sfilters\sthe\snamed\skeys\sfirst\sinstead\sof\smatching\sthe\swhole\soptions\sdictionary
+D 2026-11-06T22:04:06.194
 F Makefile.in d91f5766c7267c53141b153feddddf9197a5bf92cdf5ab10a12126ba0e1fc13d
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -315,7 +315,7 @@ F filterCcitt.tcl a5ca299a5196e42fcc73439ff0981c5067deab8bb1684b079f25a1b5fa68b2
 F font.tcl c1f98b2092048e4c2a392eece0dcd361d1bd6170ea2398a5fb3e601a3cdeef97
 F forms.tcl a440d188abb0e037482ceec390abe5a2a90f107fe0575c25e241be19f0bd1366
 F gdef.tcl 2ffc3bd92c983a8894b23ba31dd6d483e9117dfe0141c38560f0d623fe6b2d34
-F geometry.tcl 569651d4025c5ac2c43a5c2b05b25ca375c44ebc56b4ab87b5c2ac5c1fd56993
+F geometry.tcl d5ae9fdb5a5ec6c5adddf45875187890f724bf284034f82779367e5d95eda9bf
 F glyfOutline.tcl b4d86d55f7e3da8c68c86f21180c36624d6696ccec111abf379190bfb4108fae
 F glyfPath.tcl eb6d214e583e9845feb09b699215a44df574b4aa92f4d0236840d6c45da1f71d
 F graphics.tcl 91498e436d9900d91ed8376d2a0b80a8376b15daedaff80b73323880c95b82c9
@@ -352,16 +352,16 @@ F markPos.tcl 5088ee33556ccf507a3baca4a1c8637cf1021c60a96036f3ee7a6838e3ecf216
 F markdown.tcl 26036b169950ed8c896fa2476957201753ec16fd2fca9f0bab372ba35b6fc9c2
 F markup.tcl 0dd36f6b53cfba435683aa7760ff49fb663bd4df1768b1f0aa0b41b7490ebe20
 F morx.tcl 37fb7613d581a42f46980a5cb566772593958e2441da17a855993f396ffa6ffe
-F option.tcl b5d7dc81bd7f501997344b6692da6752d8e3051d4187b68c359d4faa8f6b39ac
+F option.tcl ec8216ed3adf0c6eb2e853e65eed5cef8194976295aa89e0ee2f8850c1d1e01b
 F otLayout.tcl 8bb55cb2adcd4dc8e039e17cf4e22e038d62191e29371fefa1c64c1991ce0aeb
 F outline.tcl d3ba4f7ab32078cda6267c0b6bd1f1009e3c765f29b9ea854c59e5b29c504cb0
 F output.tcl ea63eb57092f6acfd5a8a408c52e747afd9692f09fb121cb6739f8968f138f17
-F page.tcl 0107d3e20a7ead9acf50408b5f1695fb37395cf10ff8bf6bfe09465ad95d05a5
+F page.tcl 52ad4b84e7d4fc61d15ff459fb18111431bfccc218eb4e4425823385db85799d
 F pageLabel.tcl fa470a3e9d7926717fe46c846b223bf35c7bb17c52b7284c144f622c2b1e2934
 F pageNumber.tcl d8b3fd3d6b944d17c3af8f6cba7b1e5b37f0acc8bcf22e86f26ebc29579feba7
 F pattern.tcl ff3122343995d0403d5227c27f2f6533a3aae71e4a3a4b36cd73624efd3643d9
 F pdfFunction.tcl db7bc175846afc7d36aa2663151c5d66e0fe8ccc01d6e966064e33917414d70d
-F pdfObj.tcl 60b360d087277f82479916d2e829279a68765e9c5c2e927a6bdeeb82b130e760
+F pdfObj.tcl 043bc27cab0378c863bafe382cbb81dbbc4c979ea7a5575b0c7321e679f5c124
 F pdfa.tcl 9017916033a88a1edceacbabf21ab9c95d1493459014c2961d8cf844e76770e1
 F pkgIndex.tcl.in 05d578a3b5bab538e8fdbef8816edd8631fbe5e31fd91a0713d653fbf57d0d16
 F sbix.tcl 79af5fd7e5d26953f740b2477893c42cc8beb98ebc5b9aa71396f69fb835480c
@@ -485,7 +485,7 @@ F tests/writer.test 5858be47dbd0a986000abfbe874e6768ba84eba22b2bd9c1e10e2f074b38
 F tests/xObject.test a2fa0202373d8817935d193637d74445031f24bfb87cf3908b7a3f337e5950a0
 F tests/xmp.test ff2a2d9fcfad1043e5466d241f1a54ef70acc694fd9c639cc1f270a933baa4e3
 F tests/zugferd.test 8b9e0cd5fe2b510cbc91a70f39081b63e38b7f1cf10b15f44866fd9238280ad4
-F text.tcl 9c4ac3d1c0a85da11cea5de0962bc64ae2a27a15a220373f1d2fa7e960f93429
+F text.tcl f58164a5f93d0e9c28e7d05f27a0bf551d42c54266420517934097dcfaaa904c
 F textAvoid.tcl 1bbb96cb2a679d0f926f42e0103aea52866eec3b7f3920e15de827cb5e223f83
 F textBlock.tcl 25420c853a6e2053e2d8ee3f93edefc8725c84291b7e9d4bbd6b59aaa3d9ba55
 F textPath.tcl d8013365a76aa6de733a24281bf756f6057869fe54e7031ef938376a581b3394
@@ -520,8 +520,8 @@ F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
 F xml.tcl b5d29939054a07f376f34f801e2f8fe240bdc50225bc2552289d548d912d6111
 F xmp.tcl 06650fcfafd13f8e1391b6e6df2a85e5cacec39459fdec1f8ff7edb7076b72ba
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 18f0fa3f956d51f693031f23480b8f7a216f42590f91cdb6d228a3248fedc535
-R 5614fe3bb923203e2cf6a05c321c27dc
+P 8b6b2ed030d36010eeeac313d82d22a81f0a7fde46487b21e98836478407a36f
+R b0f10bb0f6fb580142fca479d48babe3
 U alex
-Z dc60aad5db0a211360002cb993da830f
+Z 7878e64aaeaef351609c857068787f07
 # Remove this line to create a well-formed Fossil manifest.

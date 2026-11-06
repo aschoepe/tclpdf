@@ -67,7 +67,11 @@ proc ::tclpdf::geometry::toPoints {value {unit mm}} {
     return -code error -errorcode [list TCLPDF GEOMETRY UNIT $unit] \
         "tclpdf: unknown unit \"$unit\" - use pt, px, mm, cm or in"
   }
-  set read [::tclpdf::pdfObj::decimal $value]
+  set read $value
+  if {[string match {0[0-9]*} $value]
+      || [string match {[-+]0[0-9]*} $value]} {
+    set read [::tclpdf::pdfObj::decimal $value]
+  }
   if {![string is double -strict $read]} {
     return -code error -errorcode [list TCLPDF GEOMETRY MEASURE $value] \
         "tclpdf: not a measurement: \"$value\""

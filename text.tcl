@@ -2982,7 +2982,10 @@ oo::define ::tclpdf::document::document {
   # under Tcl 9 and "-size 08" eight rather than a refusal.
   method TextCheck {name value} {
     if {$name in {size stretch leading spacing wordSpacing rise strokeWidth}} {
-      set value [::tclpdf::pdfObj decimal $value]
+      if {[string match {0[0-9]*} $value]
+          || [string match {[-+]0[0-9]*} $value]} {
+        set value [::tclpdf::pdfObj::decimal $value]
+      }
     }
     switch -- $name {
       style {

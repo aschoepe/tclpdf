@@ -161,14 +161,18 @@ proc ::tclpdf::option::keys {value known what {context {}}} {
 # otherwise stand at every command that reads a number out of its options,
 # and the reading itself stays in one place, [pdfObj decimal].
 #
-# THE COMMON CASE COSTS ONE [regexp]: a dictionary in which no word begins
-# with a zero followed by a digit has nothing to read, and every text call
-# of a table cell comes through here - measured 2026-11-06, 2514 calls for
-# the four tables of examples/04.01. The same question is asked of each key
-# before its value is taken apart.
+# THE COMMON CASE ASKS ONLY THE NAMED KEYS, and never turns $options itself
+# into a string: every text call of a table cell comes through here (2514
+# calls for the four tables of examples/04.01), and a [regexp] over the
+# whole dictionary cost 162.2 ms against 156.9 ms for the same run asking
+# the [dict filter] of the named keys - measured 2026-11-06 under 8.6.18,
+# 167.6 against 162.1 under 9.0.4. A [string match] goes first because it
+# is cheaper than the [regexp] and finds every word that one finds; the same
+# question is asked of each key before its value is taken apart.
 proc ::tclpdf::option::decimals {options keys} {
   variable leadingZero
-  if {![regexp $leadingZero $options]} {
+  set named [dict filter $options key {*}$keys]
+  if {![string match {*0[0-9]*} $named] || ![regexp $leadingZero $named]} {
     return $options
   }
   foreach key $keys {
@@ -342,7 +346,11 @@ proc ::tclpdf::option::finite {value} {
 # "10" under Tcl 8.6 as under Tcl 9, and "08" is a number rather than a
 # refusal. A caller that goes on with the value takes it from here.
 proc ::tclpdf::option::number {value what {context {}}} {
-  set read [::tclpdf::pdfObj::decimal $value]
+  set read $value
+  if {[string match {0[0-9]*} $value]
+      || [string match {[-+]0[0-9]*} $value]} {
+    set read [::tclpdf::pdfObj::decimal $value]
+  }
   if {![finite $read]} {
     return -code error -errorcode [list TCLPDF OPTION NUMBER $what $context] \
         "tclpdf: $what[Where $context] is a finite number, not \"$value\" -\

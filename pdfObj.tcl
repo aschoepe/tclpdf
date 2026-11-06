@@ -76,7 +76,10 @@ proc ::tclpdf::pdfObj::decimal {value} {
 # Read in decimal first ([decimal] above): this is the last line before the
 # stream, and a "010" that came this far unread is still ten, not eight.
 proc ::tclpdf::pdfObj::num {value {digits 5}} {
-  set value [decimal $value]
+  if {[string match {0[0-9]*} $value]
+      || [string match {[-+]0[0-9]*} $value]} {
+    set value [decimal $value]
+  }
   if {![string is double -strict $value]} {
     return -code error -errorcode [list TCLPDF PDFOBJ NUMBER $value] \
         "tclpdf: not a number: \"$value\""

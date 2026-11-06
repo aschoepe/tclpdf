@@ -512,7 +512,10 @@ oo::define ::tclpdf::document::document {
     # Read in decimal (pdfObj.tcl, [decimal]): page 010 is the eleventh
     # under Tcl 8.6 as under Tcl 9, and 08 a page rather than a word that
     # compares as a string.
-    set index [::tclpdf::pdfObj decimal $index]
+    if {[string match {0[0-9]*} $index]
+        || [string match {[-+]0[0-9]*} $index]} {
+      set index [::tclpdf::pdfObj::decimal $index]
+    }
     if {$index < 0 || $index >= [llength $tclpdfPages]} {
       return -code error -errorcode [list TCLPDF PAGE INDEX $index] \
           "tclpdf: no such page: $index - the document has\
