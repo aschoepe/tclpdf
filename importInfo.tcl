@@ -16,7 +16,7 @@
 # the topic is that it answers without taking anything over.
 #
 package require Tcl 8.6.11-
-package require tclpdf::importRead 1.0-
+package require tclpdf::importRead 1.7-
 package require tclpdf::option 1.0-
 package require tclpdf::pdfObj 1.0-
 
@@ -1314,4 +1314,4 @@ namespace eval ::tclpdf::pdf {
   unset tclpdfTable tclpdfCode tclpdfTarget
 }
 
-package provide tclpdf::importInfo 1.5
+package provide tclpdf::importInfo 1.6

@@ -23,7 +23,7 @@
 #
 package require Tcl 8.6.11-
 package require tclpdf::filter 1.0-
-package require tclpdf::pdfObj 1.0-
+package require tclpdf::pdfObj 1.9-
 package require tclpdf::option 1.0-
 package require tclpdf::document 1.0-
 
@@ -34,7 +34,8 @@ namespace eval ::tclpdf::importRead {}
 # A parsed object is a two-element list {type payload}:
 #   d {key value ...}   dictionary, keys as plain text without the slash
 #   a {value ...}       array
-#   n text              number, kept as written
+#   n text              number, kept as written - except for leading
+#                       zeros, which [Parse] takes off (010 is ten, 7.3.3)
 #   r {num gen}         indirect reference - BOTH numbers are the identity
 #                       of what it points at (7.3.10), and both are carried
 #                       through the whole reader: the cross-reference entry
@@ -48,11 +49,13 @@ namespace eval ::tclpdf::importRead {}
 #   b true|false        boolean
 #   z {}                null
 # Keeping numbers as written means a copied object round-trips
-# byte-comparably - which is why the number token is checked against the
-# whole grammar of 7.3.3 where it is read: what is kept as written and
-# written back unchanged has to be valid before it is kept. That check
-# reaches objects only; content streams are copied byte for byte, so an
-# exponential number inside a stream passes through untouched.
+# byte-comparably, leading zeros apart - which is why the number token is
+# checked against the whole grammar of 7.3.3 where it is read: what is kept
+# as written and written back unchanged has to be valid before it is kept.
+# The zeros are the one thing taken off, AFTER that check, so "0x10" is
+# still refused as written and "010" leaves as "10". Check and zeros reach
+# objects only; content streams are copied byte for byte, so an exponential
+# number - or a padded one - inside a stream passes through untouched.
 # Names and strings are decoded: strings because their
 # escapes must be understood to find the closing parenthesis at all, names
 # because every Get compares plain text - /Ro#74ate IS /Rotate (7.3.5.2).
@@ -233,25 +236,28 @@ proc ::tclpdf::importRead::ParseToken {bytes posVar} {
 # to hand its token to [expr] or to [string range] unfiltered, and read the
 # same valid file differently under the two interpreters.
 #
-# Trimming rather than [scan %lld], which is exact at any length. The token
-# has to be an integer of 7.3.3 - decimal digits with an optional sign, and
+# Text rather than [scan %lld], which is exact at any length. The token has
+# to be an integer of 7.3.3 - decimal digits with an optional sign, and
 # nothing else: the empty string comes back for anything that is not, so a
 # caller tests one thing instead of two ([string is entier] is no help here,
-# it takes 0x10 and 0b1). What is NOT normalised is a plain number OBJECT -
-# that one is kept as written, so a copied object still round-trips byte for
-# byte.
+# it takes 0x10 and 0b1). A plus sign is dropped, a minus kept.
+#
+# THE ZEROS ARE TAKEN OFF BY [pdfObj decimal], not here: that is the one
+# reader of a leading-zero literal in this package, and this proc adds only
+# what a token of the READER needs on top - the integer check and the "{}"
+# answer. A plain number OBJECT no longer needs this proc for its zeros:
+# [Parse] reads it in decimal where the token becomes a number (see there).
 proc ::tclpdf::importRead::Decimal {token} {
-    if {![regexp {^([-+]?)(\d+)$} $token -> sign digits]} {
+    if {![regexp {^[-+]?\d+$} $token]} {
         return {}
     }
-    set value [string trimleft $digits 0]
-    if {$value eq {}} {
-        set value 0
+    if {[string index $token 0] eq "+"} {
+        set token [string range $token 1 end]
     }
-    if {$sign eq "-"} {
-        return -$value
+    if {[string match {0[0-9]*} $token] || [string match {-0[0-9]*} $token]} {
+        set token [::tclpdf::pdfObj::decimal $token]
     }
-    return $value
+    return $token
 }
 
 # One object, starting at pos; pos ends up behind it. keywordVar receives a
@@ -411,6 +417,33 @@ proc ::tclpdf::importRead::Parse {bytes posVar {depth 0}} {
                     }
                 }
                 set pos $mark
+            }
+            # THE ONE PLACE A NUMBER OF A FOREIGN FILE IS READ IN DECIMAL.
+            # "/Count 011" is eleven and "/MediaBox [0 0 0612 0792]" is a
+            # letter page (7.3.3 allows the zeros - its EXAMPLE 1 in ISO
+            # 32000-2 lists 00987 as an integer), but Tcl 8.6 reads a leading
+            # zero as octal wherever the payload meets [expr], [incr] or
+            # [string is entier]: 011 was nine pages, 08 no number at all,
+            # 0612 became 394, /Rotate 0132 a quiet 90 - while Tcl 9 read the
+            # same file in decimal. Every consumer of a number object reads
+            # it from here, so reading it here once is what makes all of
+            # them right - /Count, the boxes, /Rotate, /Ff, /I, /ByteRange,
+            # /Size, the predictor and fax parameters - instead of a reader
+            # at each of them that the next consumer forgets.
+            #
+            # The price is the spelling, and it is paid knowingly: an object
+            # copied by an import, an update or a signature carries "10"
+            # where the file wrote "010" - the same number, which is all
+            # 7.3.3 makes of it. Two [string match] for every number that
+            # does not begin with a zero, and nothing else - measured
+            # 2026-11-06 on an array of 50 000 numbers, 2.60 against 2.61 us
+            # a token under 8.6.18 and 2.73 against 2.78 under 9.0.4; a
+            # number that does begin with one pays the call of the reader,
+            # about 2 us. The grammar is [pdfObj decimal]'s, reals included:
+            # "0612.0" is 612.0, "-012" is -12, "00.5" is 0.5.
+            if {[string match {0[0-9]*} $number]
+                    || [string match {[-+]0[0-9]*} $number]} {
+                set number [::tclpdf::pdfObj::decimal $number]
             }
             return [list n $number]
         }
@@ -2142,4 +2175,4 @@ proc ::tclpdf::importRead::Version {readerVar} {
 
 # ------------------------------------------------------------ the takeover
 
-package provide tclpdf::importRead 1.6
+package provide tclpdf::importRead 1.7

@@ -338,7 +338,7 @@ proc ::tclpdf::sign::TsDictionary {size} {
 # appended, serial and time (genTime as the token spells it, UTC), and url
 # or tsa - whichever transport answered.
 proc ::tclpdf::sign::timestamp {path args} {
-  package require tclpdf::update 1.0-
+  package require tclpdf::update 1.5-
 
   set options [::tclpdf::option parse {
     url https://tsr.open-tsa.eu tsa {} hash sha256 size 8192

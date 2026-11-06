@@ -1976,13 +1976,16 @@ test import-24.21 {a number token is held to the whole grammar of 7.3.3} -body {
             {::tclpdf::importRead::Parse "$token " pos}]
     }
     set taken {}
+    # 007 is a number the grammar allows, and it is taken as the number it
+    # is - seven, read in decimal where the token becomes a number, under
+    # Tcl 8.6 as under Tcl 9 (importDecimal.test has the rest of that).
     foreach token {0 12 +17 -8 1.5 -.002 .5 4. 007} {
         set pos 0
         lappend taken [::tclpdf::importRead::Parse "$token " pos]
     }
     list [lsort -unique $refused] $taken
 } -result {{{1 1 {TCLPDF IMPORT SYNTAX}}} {{n 0} {n 12} {n +17} {n -8} {n 1.5}\
- {n -.002} {n .5} {n 4.} {n 007}}}
+ {n -.002} {n .5} {n 4.} {n 7}}}
 
 test import-24.22 {the refusal names the token and where in the file it stands} -body {
     set pos 0

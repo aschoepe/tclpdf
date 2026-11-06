@@ -58,7 +58,7 @@
 # files without a document around it.
 
 package require Tcl 8.6.11-
-package require tclpdf::importRead 1.0-
+package require tclpdf::importRead 1.7-
 package require tclpdf::pdfFunction 1.0-
 package require tclpdf::pdfObj 1.0-
 package require tclpdf::option 1.4-

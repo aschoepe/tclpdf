@@ -187,9 +187,9 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::pdfObj 1.0-
+package require tclpdf::pdfObj 1.9-
 package require tclpdf::io 1.0-
-package require tclpdf::importRead 1.0-
+package require tclpdf::importRead 1.7-
 package require tclpdf::writer 1.0-
 package require tclpdf::crypto 1.0-
 
@@ -369,7 +369,13 @@ oo::class create ::tclpdf::update::Session {
   }
 
   # Whether the file defines that object, or this update does.
+  # An object NUMBER A CALLER HANDS IN - to defines, release, put, replace,
+  # ref and body - is read in decimal like every number the package takes
+  # ([pdfObj decimal]): "replace 010" is object ten under Tcl 8.6 as under
+  # Tcl 9, where 8.6 used to refuse "08" as no positive integer and both
+  # looked "010" up as a key the table does not have.
   method defines {number} {
+    set number [::tclpdf::pdfObj::decimal $number]
     return [expr {[dict exists $tclpdfBodies $number]
         || [dict exists $tclpdfReader xref $number]}]
   }
@@ -397,6 +403,7 @@ oo::class create ::tclpdf::update::Session {
   # did in the writer: the increment stands, the body never comes, and the
   # cross-reference section of the update names an object that is not there.
   method release {number} {
+    set number [::tclpdf::pdfObj::decimal $number]
     if {![dict exists $tclpdfBodies $number]} {
       return -code error -errorcode [list TCLPDF UPDATE OBJECT $number] \
           "tclpdf: object $number was never reserved by this\
@@ -417,6 +424,7 @@ oo::class create ::tclpdf::update::Session {
 
   # Fill a number this update reserved.
   method put {number body} {
+    set number [::tclpdf::pdfObj::decimal $number]
     if {![dict exists $tclpdfBodies $number]} {
       return -code error -errorcode [list TCLPDF UPDATE OBJECT $number] \
           "tclpdf: object $number was never reserved by this\
@@ -440,7 +448,9 @@ oo::class create ::tclpdf::update::Session {
   # A second copy of an object the file already carries. The first copy stays
   # where it is; the cross-reference entry of this update decides which of
   # them a reader takes (7.5.6).
+  #
   method replace {number body} {
+    set number [::tclpdf::pdfObj::decimal $number]
     my CheckReplaceable $number
     if {![dict exists $tclpdfBodies $number]} {
       lappend tclpdfOrder $number
@@ -479,6 +489,7 @@ oo::class create ::tclpdf::update::Session {
   # update ADDS is at generation 0 (nothing here ever raises one), so the
   # question is only asked of the file.
   method ref {number} {
+    set number [::tclpdf::pdfObj::decimal $number]
     if {![my defines $number]} {
       return -code error -errorcode [list TCLPDF UPDATE OBJECT $number] \
           "tclpdf: no such object: $number - neither\
@@ -505,6 +516,7 @@ oo::class create ::tclpdf::update::Session {
   # filter - the import decodes only what it must, and a body that is handed
   # straight back to [replace] must not be re-encoded on the way.
   method body {number} {
+    set number [::tclpdf::pdfObj::decimal $number]
     if {[dict exists $tclpdfBodies $number]} {
       set body [dict get $tclpdfBodies $number]
       if {$body ne {}} {
@@ -815,4 +827,4 @@ oo::class create ::tclpdf::update::Session {
   }
 }
 
-package provide tclpdf::update 1.4
+package provide tclpdf::update 1.5

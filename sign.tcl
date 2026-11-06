@@ -1351,7 +1351,8 @@ proc ::tclpdf::sign::add {path args} {
   # the split: a document that signs itself needs no PDF reader, and pulling
   # import.tcl and update.tcl into every signing script would be a dependency
   # nobody asked for. A file that is signed a second time cannot avoid them.
-  package require tclpdf::update 1.0-
+  # 1.5 for the reader under it, which reads /Count 011 as eleven.
+  package require tclpdf::update 1.5-
 
   set options [::tclpdf::option parse {
     signer {} size 16384 name {} reason {} location {} contact {}
