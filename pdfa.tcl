@@ -40,7 +40,7 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::io 1.0-
 package require tclpdf::filter 1.0-
 package require tclpdf::xmp 1.0-
@@ -94,6 +94,9 @@ oo::define ::tclpdf::document::document {
     set current [dict merge $current [::tclpdf::option parse \
         [dict filter $current key part conformance profile identifier] \
         $args "pdfa"]]
+    # The part read in decimal before it is checked and claimed (pdfObj.tcl,
+    # [decimal]): -part 03 is PDF/A-3.
+    set current [::tclpdf::option decimals $current {part}]
 
     # Everything below up to the version calls is a CHECK and changes
     # nothing: a refused call has to leave the document as it was. It used
@@ -605,4 +608,4 @@ proc ::tclpdf::pdfa::description {bytes} {
   return {}
 }
 
-package provide tclpdf::pdfa 1.13
+package provide tclpdf::pdfa 1.14

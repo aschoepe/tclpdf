@@ -39,8 +39,8 @@ package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
 package require tclpdf::afm 1.0-
-package require tclpdf::option 1.0-
-package require tclpdf::text 1.0-
+package require tclpdf::option 1.4-
+package require tclpdf::text 1.27-
 
 namespace eval ::tclpdf::textBlock {
   # The options of a block, with their defaults - the same list [text] takes,
@@ -288,6 +288,9 @@ oo::define ::tclpdf::document::document {
     }
     set defaults [dict merge $defaults $::tclpdf::text::runOptions]
     set options [::tclpdf::option parse $defaults $arguments $context]
+    # The numbers read in decimal before anything checks them (text.tcl,
+    # [decimals]).
+    set options [::tclpdf::text::decimals $options]
     if {[dict get $options width] eq {}} {
       return -code error -errorcode [list TCLPDF TEXT BLOCK width] \
           "tclpdf: a text block needs -width"
@@ -2298,4 +2301,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.21
+package provide tclpdf::textBlock 1.22

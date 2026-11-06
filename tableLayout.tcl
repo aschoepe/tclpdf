@@ -26,10 +26,10 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 # For [pdfObj fits] - the one place the magnitude a PDF real holds stands
 # (Annex C.2), asked by TableMeasurable below.
-package require tclpdf::pdfObj 1.0-
+package require tclpdf::pdfObj 1.9-
 # 1.20 for [TextLinesWidest], the width of a cell of runs; 1.21 for the
 # width of a list in it, its indent taken in.
 package require tclpdf::textBlock 1.21-
@@ -151,6 +151,9 @@ oo::define ::tclpdf::document::document {
       dict set cell text $source
     }
     foreach key {colSpan rowSpan} {
+      # Read in decimal first (pdfObj.tcl, [decimal]): colSpan 02 spans two
+      # columns under Tcl 8.6 as under Tcl 9.
+      dict set cell $key [::tclpdf::pdfObj decimal [dict get $cell $key]]
       if {![string is integer -strict [dict get $cell $key]] ||
           [dict get $cell $key] < 1} {
         return -code error -errorcode [list TCLPDF TABLE SPAN $key] \
@@ -396,6 +399,9 @@ oo::define ::tclpdf::document::document {
       # come back as a Tcl error about a non-numeric operand, which names
       # neither the column nor the key. There is no percent width - a share
       # of the table is what weight is for.
+      #
+      # Both read in decimal first (pdfObj.tcl, [decimal]).
+      set column [::tclpdf::option decimals $column {width weight}]
       foreach key {width weight} {
         if {[dict exists $column $key]
             && (![::tclpdf::option finite [dict get $column $key]]
@@ -766,6 +772,9 @@ oo::define ::tclpdf::document::document {
   # measured, so that a table with a mistyped value draws nothing at all.
   # size and family go through [text], which has its own word on both.
   method TableStyleCheck {style} {
+    # The numbers of the style read in decimal before they are checked and
+    # used (pdfObj.tcl, [decimal]); the colours are the colour module's.
+    set style [::tclpdf::option decimals $style {size leading padding lineWidth}]
     # A VERTICAL TABLE IS REFUSED HERE AND IN THE TABLE'S OWN WORDS, since
     # 2026-08-25. It used to be caught by [text] on the way through, which
     # was right as long as that road refused every vertical block; now that
@@ -842,4 +851,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::tableLayout 1.10
+package provide tclpdf::tableLayout 1.11

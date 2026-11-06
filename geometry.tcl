@@ -21,7 +21,7 @@ package require Tcl 8.6.11-
 # file, and pdfObj is what puts them there - see [singular]. Nothing else
 # here writes PDF, and pdfObj depends on nothing but Tcl, so this stays the
 # one-way street the infrastructure is meant to be.
-package require tclpdf::pdfObj 1.0-
+package require tclpdf::pdfObj 1.9-
 # And option, for the one predicate that answers "is this a number something
 # can be measured in" - NaN and Inf are doubles to Tcl and are neither a
 # length nor a factor. option.tcl depends on nothing but Tcl, so the
@@ -56,6 +56,10 @@ namespace eval ::tclpdf::geometry {
 }
 
 # Convert a value into points.
+#
+# Read in decimal first ([pdfObj decimal]): this is the one gate every
+# measurement of a page passes, and "010" is ten millimetres under Tcl 8.6
+# as under Tcl 9, not eight.
 proc ::tclpdf::geometry::toPoints {value {unit mm}} {
   variable units
   set key [string tolower $unit]
@@ -63,11 +67,12 @@ proc ::tclpdf::geometry::toPoints {value {unit mm}} {
     return -code error -errorcode [list TCLPDF GEOMETRY UNIT $unit] \
         "tclpdf: unknown unit \"$unit\" - use pt, px, mm, cm or in"
   }
-  if {![string is double -strict $value]} {
+  set read [::tclpdf::pdfObj::decimal $value]
+  if {![string is double -strict $read]} {
     return -code error -errorcode [list TCLPDF GEOMETRY MEASURE $value] \
         "tclpdf: not a measurement: \"$value\""
   }
-  return [expr {$value * [dict get $units $key]}]
+  return [expr {$read * [dict get $units $key]}]
 }
 
 # And back, for reporting positions to the caller in the unit they chose.
@@ -371,11 +376,19 @@ proc ::tclpdf::geometry::singular {matrix} {
 # where the reasoning for that sits. The case that has to be caught either
 # way is the caller who wrote {1 2 2 4 0 0}: two proportional columns, and
 # 1*4 - 2*2 is exactly 0 in floating point.
+#
+# The matrix comes back READ IN DECIMAL ([pdfObj decimal]): "010" is ten
+# under Tcl 8.6 as under Tcl 9, for the determinant below as for the cm a
+# caller writes with what this returns.
 proc ::tclpdf::geometry::check {matrix what} {
   if {[llength $matrix] != 6} {
     return -code error -errorcode [list TCLPDF GEOMETRY MATRIX $what] \
         "tclpdf: -matrix of $what is six numbers {a b c d e f},\
         not [llength $matrix]"
+  }
+  set read [lmap number $matrix {::tclpdf::pdfObj::decimal $number}]
+  if {$read ne [list {*}$matrix]} {
+    set matrix $read
   }
   foreach number $matrix {
     if {![::tclpdf::option finite $number]} {
@@ -397,6 +410,10 @@ proc ::tclpdf::geometry::check {matrix what} {
 # - a picture, a drawing - before [fitExtent] reads them: -size {w h}, -width,
 # -height, -scale and -dpi, whichever the dict carries. Returns nothing; the
 # error names the owner ("image place", "svg") so the caller does not have to.
+#
+# The values are judged as they stand: a caller reads its options in decimal
+# before it gets here ([option decimals]), so a -width of 010 is ten and 08
+# a width rather than a refusal under Tcl 8.6 as under Tcl 9.
 #
 # Every one of them ends up in the cm that places the thing, and there is
 # only one kind of value that belongs there: a length or a factor ABOVE zero.
@@ -465,4 +482,4 @@ proc ::tclpdf::geometry::checkFit {options what} {
   return
 }
 
-package provide tclpdf::geometry 1.7
+package provide tclpdf::geometry 1.8

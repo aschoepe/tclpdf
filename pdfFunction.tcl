@@ -44,7 +44,7 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::pdfObj 1.0-
+package require tclpdf::pdfObj 1.9-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::pdfFunction {
@@ -262,7 +262,11 @@ proc ::tclpdf::pdfFunction::checkCalculator {body subject errorcode} {
       }
       continue
     }
-    if {[string is double -strict $token]} {
+    # A number is asked in decimal (pdfObj.tcl, [decimal]): "08" is a number
+    # in a PostScript calculator, which a reader reads in decimal (7.3.3),
+    # and Tcl 8.6 alone would have called it no number at all. The body is
+    # written as the caller wrote it.
+    if {[string is double -strict [::tclpdf::pdfObj decimal $token]]} {
       continue
     }
     if {$token ni [operators]} {
@@ -280,4 +284,4 @@ proc ::tclpdf::pdfFunction::checkCalculator {body subject errorcode} {
   return $body
 }
 
-package provide tclpdf::pdfFunction 1.2
+package provide tclpdf::pdfFunction 1.3

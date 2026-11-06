@@ -91,7 +91,7 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::structure {
@@ -494,6 +494,9 @@ oo::define ::tclpdf::document::document {
       alt {} lang {} title {} actualText {} expansion {} script {} name {}
       id {} ref {} scope {} numbering {} bbox {} colSpan {} rowSpan {}
     } $args "structure"]
+    # The three numbers read in decimal before they are checked and written
+    # (pdfObj.tcl, [decimal]). -id and -name are names and stay as written.
+    set options [::tclpdf::option decimals $options {bbox colSpan rowSpan}]
     # Missing, not empty: an element with nothing in it is a legitimate thing
     # to ask for - a placeholder a link points at, an L that is filled later
     # - and [option parse] cannot tell an empty -script from an absent one,
@@ -1842,4 +1845,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::structure 1.7
+package provide tclpdf::structure 1.8

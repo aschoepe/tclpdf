@@ -20,9 +20,9 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::pdfObj 1.0-
+package require tclpdf::pdfObj 1.9-
 package require tclpdf::afm 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::color 1.0-
 package require tclpdf::document 1.0-
 
@@ -141,6 +141,27 @@ namespace eval ::tclpdf::text {
   # because two places rebuild a -name value list from it, and a list rebuilt
   # from the shorter one silently drops the direction of a paragraph.
   variable lineOptions [concat $stateOptions [dict keys $runOptions]]
+
+  # The options of a block that are NUMBERS, read in decimal at the call
+  # ([decimals] below). The font state's own numbers are read by
+  # [TextCheck].
+  variable numberOptions {at rotate width height columns gutter indent
+      indentRight firstIndent paragraphSpacing avoid avoidMargin shrinkLimit
+      fit}
+}
+
+# The numbers of a [text], [textLines] or [textHeight] call read in decimal
+# (pdfObj.tcl, [decimal]), before anything checks or computes with them:
+# "-width 0100" is a hundred under Tcl 8.6 as under Tcl 9, and "-columns 02"
+# two. One proc for the two places that parse those options, so that the
+# list stands once.
+#
+# -avoid is among them: a list of shapes, {rect {x y} {w h} ?margin?} and
+# {circle {x y} r ?margin?}, whose numbers [option decimals] reads down to
+# the bottom of the nesting while the kind stays the word it is.
+proc ::tclpdf::text::decimals {options} {
+  variable numberOptions
+  return [::tclpdf::option decimals $options $numberOptions]
 }
 
 # A REAL NUMBER, which is what every size, distance, angle and percentage in
@@ -228,7 +249,8 @@ oo::define ::tclpdf::document::document {
     # module. Loaded on demand: a caller who only uses the standard fonts
     # never pays for it.
     if {[lindex $args 0] in {embed names info}} {
-      package require tclpdf::font
+      # 1.20 for -face and -axes read in decimal.
+      package require tclpdf::font 1.20-
       switch -- [lindex $args 0] {
         embed {return [my FontEmbed {*}[lrange $args 1 end]]}
         names {return [my FontNames]}
@@ -252,7 +274,8 @@ oo::define ::tclpdf::document::document {
       return [my FontFamily {*}[lrange $args 1 end]]
     }
     if {[lindex $args 0] in {define glyph}} {
-      package require tclpdf::type3
+      # 1.5 for the numbers of a Type 3 font read in decimal.
+      package require tclpdf::type3 1.5-
       switch -- [lindex $args 0] {
         define {return [my Type3Define {*}[lrange $args 1 end]]}
         glyph {
@@ -270,7 +293,7 @@ oo::define ::tclpdf::document::document {
     # left the family changed and the size where it was.
     set parsed [::tclpdf::option parse $defaults $args "font"]
     foreach {name value} $parsed {
-      my TextCheck $name $value
+      dict set parsed $name [my TextCheck $name $value]
     }
     # Resolving now rather than at output time means a wrong family is
     # reported where it was written, not three calls later - and resolving
@@ -378,6 +401,7 @@ oo::define ::tclpdf::document::document {
     # which is where it is checked.
     set defaults [dict merge $defaults $::tclpdf::text::runOptions]
     set options [::tclpdf::option parse $defaults $args "text"]
+    set options [::tclpdf::text::decimals $options]
     # Checked rather than left to lassign: writing -at {20 [expr {$y+5}]} is a
     # standing invitation, the braces stop the substitution, and Tcl then
     # reports "list element in braces followed by ]" from somewhere inside the
@@ -2952,7 +2976,14 @@ oo::define ::tclpdf::document::document {
   # the size (decided in TextMerge, where the size is known). Spacing, word
   # spacing and rise take any number: negative spacing tightens, a negative
   # rise is a subscript.
+  #
+  # THE VALUE TO STORE IS THE ONE THIS RETURNS: the numbers read in decimal
+  # (pdfObj.tcl, [decimal]), so "-size 010" is ten points under Tcl 8.6 as
+  # under Tcl 9 and "-size 08" eight rather than a refusal.
   method TextCheck {name value} {
+    if {$name in {size stretch leading spacing wordSpacing rise strokeWidth}} {
+      set value [::tclpdf::pdfObj decimal $value]
+    }
     switch -- $name {
       style {
         # The words the manual names, split the way they are read: any
@@ -3085,7 +3116,7 @@ oo::define ::tclpdf::document::document {
         }
       }
     }
-    return
+    return $value
   }
 
   method TextInit {} {
@@ -3130,7 +3161,7 @@ oo::define ::tclpdf::document::document {
         dict set state $name $value
       }
       if {$name in $::tclpdf::text::stateOptions} {
-        my TextCheck $name $value
+        set value [my TextCheck $name $value]
         dict set state $name $value
         if {$name in {family style}} {
           set changed 1
@@ -3278,4 +3309,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.26
+package provide tclpdf::text 1.27

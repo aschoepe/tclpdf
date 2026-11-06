@@ -25,7 +25,7 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::link {}
@@ -36,6 +36,10 @@ oo::define ::tclpdf::document::document {
     set options [::tclpdf::option parse {
       at {} size {} url {} page {} to {} zoom {} tooltip {} structure {}
     } $args "link"]
+    # The numbers read in decimal before anything checks or computes with
+    # them (pdfObj.tcl, [decimal]). -url and -tooltip are text and stay as
+    # they are.
+    set options [::tclpdf::option decimals $options {at size page to zoom}]
     if {[dict get $options at] eq {} || [dict get $options size] eq {}} {
       return -code error -errorcode [list TCLPDF LINK ARGUMENT rect] \
           "tclpdf: link needs -at {x y} and -size {w h}"
@@ -429,4 +433,4 @@ oo::define ::tclpdf::document::document {
   # that a document without links costs nothing.
 }
 
-package provide tclpdf::link 1.9
+package provide tclpdf::link 1.10

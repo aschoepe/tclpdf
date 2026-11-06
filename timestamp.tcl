@@ -31,6 +31,8 @@
 package require Tcl 8.6.11-
 # 1.8 for [sign::Ranged], which joins the appendix and fills its /ByteRange.
 package require tclpdf::sign 1.8-
+# [option decimals], for the numbers of the call.
+package require tclpdf::option 1.4-
 package require tclpdf::crypto 1.0-
 
 namespace eval ::tclpdf::sign {}
@@ -342,6 +344,10 @@ proc ::tclpdf::sign::timestamp {path args} {
     url https://tsr.open-tsa.eu tsa {} hash sha256 size 8192
     field {} page 0 policy {} timeout 15000
   } $args "for ::tclpdf::sign timestamp"]
+  # The numbers read in decimal before they are checked and used
+  # (pdfObj.tcl, [decimal]); the numbers of the document are read where it
+  # is read.
+  set options [::tclpdf::option decimals $options {size page timeout}]
 
   set hash [dict get $options hash]
   # The three the authorities of today take; SHA-1 is not offered at all.
@@ -440,4 +446,4 @@ proc ::tclpdf::sign::timestamp {path args} {
       {*}$through]
 }
 
-package provide tclpdf::timestamp 1.1
+package provide tclpdf::timestamp 1.2

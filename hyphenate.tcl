@@ -90,7 +90,7 @@
 #
 
 package require Tcl 8.6.11-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 
 namespace eval ::tclpdf::hyphenate {
   namespace export {[a-z]*}
@@ -290,6 +290,10 @@ proc ::tclpdf::hyphenate::load {tag path args} {
   set options [::tclpdf::option parse \
       [dict create left {} right {} min $defaultMin exceptions {}] \
       $args "hyphenate load"]
+  # The three minima read in decimal before they are checked and kept
+  # (pdfObj.tcl, [decimal]): -left 010 is ten letters under Tcl 8.6 as under
+  # Tcl 9. The directives of the file itself are its own matter.
+  set options [::tclpdf::option decimals $options {left right min}]
   Tag $tag
   foreach name {left right min} {
     set value [dict get $options $name]
@@ -1002,4 +1006,4 @@ proc ::tclpdf::hyphenate::Pieces {data string} {
   return $pieces
 }
 
-package provide tclpdf::hyphenate 1.5
+package provide tclpdf::hyphenate 1.6

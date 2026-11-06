@@ -47,8 +47,8 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::pdfObj 1.9-
+package require tclpdf::option 1.4-
 package require tclpdf::geometry 1.0-
 package require tclpdf::shape 1.0-
 package require tclpdf::text 1.0-
@@ -93,6 +93,10 @@ oo::define ::tclpdf::document::document {
       text {} lines {} at {} align left anchor baseline leading {} quads {}
       contents {} title {} colour {} color {} opacity {} appearance {} date {}
     } $args "annot $kind"]
+    # The numbers read in decimal before anything checks them (pdfObj.tcl,
+    # [decimal]); -quads is a list of rectangles and is read one by one in
+    # [AnnotGivenQuads].
+    set options [::tclpdf::option decimals $options {at leading opacity date}]
     set options [my AnnotColourOption $options "annot $kind"]
     set quads [my AnnotQuads $kind $options]
     # The rectangle is the union of the quadrilaterals, and it has to
@@ -198,6 +202,7 @@ oo::define ::tclpdf::document::document {
             counted from the top left corner as -at is everywhere else -\
             not \"$quad\""
       }
+      set quad [lmap value $quad {::tclpdf::pdfObj decimal $value}]
       foreach value $quad {
         # [option finite], for the reason [AnnotRectangle] gives: NaN and Inf
         # are doubles to Tcl, they pass every bound written as a comparison,
@@ -509,4 +514,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::annotMark 1.2
+package provide tclpdf::annotMark 1.3

@@ -76,7 +76,7 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::xmp 1.0-
 package require tclpdf::viewerPreferences 1.0-
 package require tclpdf::document 1.0-
@@ -214,6 +214,10 @@ oo::define ::tclpdf::document::document {
     # is added back afterwards.
     set current [dict merge $current [::tclpdf::option parse \
         [dict remove $current registered] $args "ua"]]
+    # The part read in decimal before it is checked and claimed (pdfObj.tcl,
+    # [decimal]): -part 02 is PDF/UA-2. -revision is a year of four digits
+    # and is asked as such.
+    set current [::tclpdf::option decimals $current {part}]
     # pdfuaid:rev is the year of the edition claimed, four digits (ISO
     # 14289-2 Table 1). Anything else would be written into the metadata as
     # given and mean nothing to a validator.
@@ -1006,4 +1010,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::ua 1.10
+package provide tclpdf::ua 1.11

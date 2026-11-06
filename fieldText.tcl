@@ -64,10 +64,11 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::color 1.0-
 package require tclpdf::geometry 1.0-
-package require tclpdf::field 1.0-
+# 1.4 for -rect, -page, -size and -borderWidth read in decimal.
+package require tclpdf::field 1.4-
 
 # Point 1 of the contract at the head of field.tcl.
 ::tclpdf::field register text tclpdf::fieldText
@@ -96,6 +97,9 @@ oo::define ::tclpdf::document::document {
       border {} borderWidth 0.4 background {} tooltip {}
       contents {} label {}
     } $args "field text"]
+    # -maxlen read in decimal before it is checked and written (pdfObj.tcl,
+    # [decimal]): 010 is /MaxLen 10 under Tcl 8.6 as under Tcl 9.
+    set options [::tclpdf::option decimals $options {maxlen}]
 
     # A LINE BREAK IS \n HERE, whichever of the three spellings the caller
     # wrote. A Windows script hands over "a\r\nb" and a Mac-era one "a\rb";
@@ -404,4 +408,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::fieldText 1.2
+package provide tclpdf::fieldText 1.3

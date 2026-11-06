@@ -99,10 +99,11 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::color 1.0-
 package require tclpdf::geometry 1.0-
-package require tclpdf::field 1.0-
+# 1.4 for -rect, -page, -size and -borderWidth read in decimal.
+package require tclpdf::field 1.4-
 
 # Point 1 of the contract. Two subcommands, one module: the two shapes of a
 # choice field differ in one flag bit and share everything else.
@@ -167,6 +168,10 @@ oo::define ::tclpdf::document::document {
       dict set defaults highlight {0.6 0.756863 0.854902}
     }
     set options [::tclpdf::option parse $defaults $arguments "field $kind"]
+    # -index and -top read in decimal before they are checked and counted
+    # (pdfObj.tcl, [decimal]): -index 010 is the eleventh option under Tcl
+    # 8.6 as under Tcl 9.
+    set options [::tclpdf::option decimals $options {index top}]
 
     set booleans {sort readonly required noexport commit}
     if {$combo} {
@@ -733,4 +738,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::fieldChoice 1.2
+package provide tclpdf::fieldChoice 1.3

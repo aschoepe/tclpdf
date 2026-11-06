@@ -54,7 +54,7 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::geometry 1.0-
 package require tclpdf::document 1.0-
 package require tclpdf::annot 1.0-
@@ -134,6 +134,9 @@ oo::define ::tclpdf::document::document {
       dict set known $name {}
     }
     set options [::tclpdf::option parse $known $args "annot $kind"]
+    # The numbers among them read in decimal, before anything checks or
+    # computes with them (pdfObj.tcl, [decimal]).
+    set options [::tclpdf::option decimals $options {width opacity date}]
     foreach name {at size from to points} {
       if {![dict exists $options $name]} {
         dict set options $name {}
@@ -209,7 +212,8 @@ oo::define ::tclpdf::document::document {
                 "tclpdf: annot line needs -from {x y} and -to {x y} - the two\
                 ends of the line, in the document unit"
           }
-          ::tclpdf::option point [dict get $options $key] -$key "annot line"
+          dict set options $key \
+              [::tclpdf::option point [dict get $options $key] -$key "annot line"]
         }
         set points [list [dict get $options from] [dict get $options to]]
       }
@@ -220,8 +224,10 @@ oo::define ::tclpdf::document::document {
               the top left corner and the extent of the rectangle it is drawn\
               in, exactly as \[\$doc rect\] takes them"
         }
-        ::tclpdf::option point [dict get $options at] -at "annot $kind"
-        ::tclpdf::option point [dict get $options size] -size "annot $kind"
+        dict set options at \
+            [::tclpdf::option point [dict get $options at] -at "annot $kind"]
+        dict set options size \
+            [::tclpdf::option point [dict get $options size] -size "annot $kind"]
         lassign [dict get $options at] left top
         lassign [dict get $options size] width height
         # A NEGATIVE EXTENT, HERE AND NOT IN THE BOX. The box below is made
@@ -259,9 +265,9 @@ oo::define ::tclpdf::document::document {
               figure, which takes three corners, and a polyline a series of\
               connected segments, which takes two ends"
         }
-        foreach point $points {
+        set points [lmap point $points {
           ::tclpdf::option point $point -points "annot $kind"
-        }
+        }]
       }
     }
     set xs {}
@@ -501,7 +507,9 @@ oo::define ::tclpdf::document::document {
           "tclpdf: annot attachment needs -at {x y} - where the icon sits on\
           the page"
     }
-    ::tclpdf::option point [dict get $options at] -at "annot attachment"
+    set options [::tclpdf::option decimals $options {opacity date}]
+    dict set options at \
+        [::tclpdf::option point [dict get $options at] -at "annot attachment"]
     if {[dict get $options name] eq {}} {
       return -code error -errorcode {TCLPDF ANNOT ATTACHMENT NAME} \
           "tclpdf: annot attachment needs -name, the name an \[\$doc attach\]\
@@ -576,4 +584,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::annotShape 1.2
+package provide tclpdf::annotShape 1.3

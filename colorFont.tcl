@@ -213,7 +213,7 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::pdfObj 1.0-
+package require tclpdf::pdfObj 1.9-
 package require tclpdf::option 1.0-
 package require tclpdf::geometry 1.0-
 package require tclpdf::io 1.0-
@@ -320,10 +320,15 @@ oo::define ::tclpdf::document::document {
   # nothing and gets the face they expect. sfnt.tcl refuses a number the file
   # has not got, with the count in the message.
   method ColorFontFaceNumber {face} {
+    # Read in decimal: -face 010 is the eleventh face under Tcl 8.6 as under
+    # Tcl 9 (pdfObj.tcl, [decimal]). The refusal quotes the value as it was
+    # written, which is what TCLPDF COLORFONT FACE promises (doc/tclpdf.md).
+    set asked $face
+    set face [::tclpdf::pdfObj decimal $face]
     if {![string is integer -strict $face] || $face < 0} {
-      return -code error -errorcode [list TCLPDF COLORFONT FACE $face] \
+      return -code error -errorcode [list TCLPDF COLORFONT FACE $asked] \
           "tclpdf: -face of colorFont is the face inside a TrueType\
-          collection, 0 or more, not \"$face\""
+          collection, 0 or more, not \"$asked\""
     }
     return $face
   }
@@ -463,6 +468,7 @@ oo::define ::tclpdf::document::document {
     if {$strike eq {}} {
       return {}
     }
+    set strike [::tclpdf::pdfObj decimal $strike]
     if {![string is integer -strict $strike] || $strike < 1} {
       return -code error -errorcode [list TCLPDF COLORFONT STRIKE $strike] \
           "tclpdf: -strike of colorFont is the size of the bitmaps to draw\
@@ -850,6 +856,7 @@ oo::define ::tclpdf::document::document {
   # text colour throughout would get away with it until the second.
   method ColorFontPalette {state palette} {
     set count [llength [dict get $state palettes]]
+    set palette [::tclpdf::pdfObj decimal $palette]
     if {![string is integer -strict $palette] || $palette < 0
         || $palette >= $count} {
       return -code error \
@@ -1073,4 +1080,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::colorFont 1.6
+package provide tclpdf::colorFont 1.7

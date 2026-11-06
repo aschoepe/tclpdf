@@ -121,7 +121,7 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::color 1.0-
 package require tclpdf::geometry 1.0-
 package require tclpdf::xml 1.0-
@@ -207,6 +207,11 @@ oo::define ::tclpdf::document::document {
       data {} at {} size {} width {} height {} scale {} opacity {} alt {}
       artifact {} fit {} fitMode {} align center valign middle
     } $arguments "svg"]
+    # The numbers of the CALL read in decimal before anything checks them
+    # (pdfObj.tcl, [decimal]). The numbers inside the drawing are the
+    # drawing's and are read where it is read.
+    set options [::tclpdf::option decimals $options \
+        {at size width height scale opacity fit}]
     # WHICH OPTIONS THE CALLER NAMED, as opposed to which ones carry a
     # default. preserveAspectRatio has to yield to the caller and only to the
     # caller - and -align/-valign default to center/middle, so their VALUE
@@ -1226,4 +1231,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::svg 1.12
+package provide tclpdf::svg 1.13

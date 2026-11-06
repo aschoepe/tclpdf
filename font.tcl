@@ -31,8 +31,8 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::pdfObj 1.9-
+package require tclpdf::option 1.4-
 package require tclpdf::filter 1.0-
 package require tclpdf::sfnt 1.0-
 package require tclpdf::subset 1.0-
@@ -208,6 +208,13 @@ oo::define ::tclpdf::document::document {
     set options [::tclpdf::option parse \
         {subset {} metrics {} axes {} instance {} data {} face 0} $args \
         "font embed"]
+    # -face read in decimal before it is checked (pdfObj.tcl, [decimal]):
+    # 010 is the eleventh face of a collection under Tcl 8.6 as under Tcl 9.
+    # The values of -axes are read in [FontAxes], where the list is taken
+    # apart. The refusal below quotes the value as it was written - TCLPDF
+    # FONT FACE promises the caller's own spelling (doc/tclpdf.md).
+    set askedFace [dict get $options face]
+    set options [::tclpdf::option decimals $options {face}]
     set fonts [my state fonts]
     if {[dict exists $fonts $alias]} {
       return -code error -errorcode [list TCLPDF FONT ALIAS $alias] \
@@ -342,9 +349,9 @@ oo::define ::tclpdf::document::document {
       if {![string is integer -strict [dict get $options face]]
           || [dict get $options face] < 0} {
         return -code error \
-            -errorcode [list TCLPDF FONT FACE [dict get $options face]] \
+            -errorcode [list TCLPDF FONT FACE $askedFace] \
             "tclpdf: -face of font embed is the face inside a TrueType\
-            collection, 0 or more, not \"[dict get $options face]\""
+            collection, 0 or more, not \"$askedFace\""
       }
       # AN sbix FACE IS ALREADY REFUSED, and one step further on: its
       # outlines are degenerate boxes rather than glyphs, [FontDrawsNothing]
@@ -669,6 +676,17 @@ oo::define ::tclpdf::document::document {
           "tclpdf: -axes is an axis tag and a value for each axis to set,\
           \"{wght 620 wdth 90}\" - \"$axes\" has an odd number of\
           elements, so one tag has no value"
+    }
+    # The values read in decimal (pdfObj.tcl, [decimal]): wght 0700 is 700
+    # under Tcl 8.6 as under Tcl 9, not 448 - and the name of the instance
+    # is derived from the value as well. The tags are text and stay as they
+    # are.
+    set read {}
+    foreach {tag value} $axes {
+      lappend read $tag [::tclpdf::pdfObj decimal $value]
+    }
+    if {$read ne [list {*}$axes]} {
+      set axes $read
     }
     package require tclpdf::varFont 1.0-
     if {![::tclpdf::varFont isVariable $parsed]} {
@@ -2860,4 +2878,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::font 1.19
+package provide tclpdf::font 1.20

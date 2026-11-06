@@ -23,11 +23,60 @@ namespace eval ::tclpdf::pdfObj {
   namespace ensemble create
 }
 
+# A number a CALLER WROTE, read in decimal whatever the interpreter.
+#
+# Tcl 8.6 reads an integer with a leading zero as OCTAL: "010" is 8 to
+# [expr], [format %d], [string is integer] and "==", and "08" is no number
+# at all - [string is double -strict 08] answers 0. Tcl 9 reads both in
+# decimal. Measured 2026-11-06 under 8.6.18 and 9.0.4: "text X -at {010 20}"
+# wrote "8 ... Td" under one and "10 ... Td" under the other, and
+# "-at {08 20}" was refused under 8.6 only. A caller who writes 010 means
+# ten - nobody measures a page in octal - so every option the package takes
+# as a number comes through here first, and the same call writes the same
+# bytes under both interpreters.
+#
+# THE CONTRACT. A plain decimal literal - an optional sign, digits, an
+# optional fraction, an optional exponent, nothing else - loses the leading
+# zeros of its integer part, keeping at least one digit: "010" -> "10",
+# "08" -> "8", "000" -> "0", "00.5" -> "0.5", "0012.5" -> "12.5", "-08" ->
+# "-8", "+010" -> "+10". The sign, the fraction and the exponent stay as
+# written: nothing is computed, so nothing is rounded either. Everything else
+# comes back UNCHANGED - "0x1A" stays hexadecimal, "0o17" and "0b101" keep
+# Tcl's own prefixes, and "NaN", "1e3", "10", " 5", "" and any word reach
+# the check behind this exactly as the caller wrote them, so that check goes
+# on refusing what it refused before, in its own words.
+#
+# TEXT ONLY, no [expr], [format] or [scan] on the raw value: any of them
+# would read it the way the interpreter reads it, which is the very thing
+# this replaces. The common case - a value that does not begin with a zero
+# followed by a digit - costs two [string match] and nothing else.
+#
+# Not for values that are TEXT made of digits - a field name, an export
+# value, a keyword. Those stay as they are, leading zeros and all.
+proc ::tclpdf::pdfObj::decimal {value} {
+  if {![string match {0[0-9]*} $value]
+      && ![string match {[-+]0[0-9]*} $value]} {
+    return $value
+  }
+  if {![regexp {^([-+]?)0+([0-9]*)((?:\.[0-9]*)?(?:[eE][-+]?[0-9]+)?)$} \
+      $value -> sign digits rest]} {
+    return $value
+  }
+  if {$digits eq {}} {
+    set digits 0
+  }
+  return $sign$digits$rest
+}
+
 # Format a number the way PDF requires it (7.3.3): fixed notation, never an
 # exponent. This is not cosmetic - "1e-05" is read as three separate tokens
 # and corrupts the content stream, and Tcl produces that notation on its own
 # for small values.
+#
+# Read in decimal first ([decimal] above): this is the last line before the
+# stream, and a "010" that came this far unread is still ten, not eight.
 proc ::tclpdf::pdfObj::num {value {digits 5}} {
+  set value [decimal $value]
   if {![string is double -strict $value]} {
     return -code error -errorcode [list TCLPDF PDFOBJ NUMBER $value] \
         "tclpdf: not a number: \"$value\""
@@ -137,6 +186,7 @@ proc ::tclpdf::pdfObj::fits {value} {
 # a whole number beyond the integer range is stripped again - it is syntax,
 # not value.
 proc ::tclpdf::pdfObj::written {value {digits 5}} {
+  set value [decimal $value]
   if {![fits $value]} {
     return $value
   }
@@ -348,4 +398,4 @@ proc ::tclpdf::pdfObj::Utf16Be {value} {
   return $result
 }
 
-package provide tclpdf::pdfObj 1.8
+package provide tclpdf::pdfObj 1.9

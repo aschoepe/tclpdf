@@ -102,11 +102,12 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::color 1.0-
 package require tclpdf::geometry 1.0-
 package require tclpdf::document 1.0-
-package require tclpdf::field 1.0-
+# 1.4 for -rect, -page, -size and -borderWidth read in decimal.
+package require tclpdf::field 1.4-
 
 ::tclpdf::field::register check tclpdf::fieldButton
 ::tclpdf::field::register radio tclpdf::fieldButton
@@ -627,7 +628,8 @@ oo::define ::tclpdf::document::document {
     # means "a number reached the writer", where the caller needs the one
     # that names the option (measured 2026-08-27 with the guard test that
     # walks every numeric option of every type).
-    my FieldSize [dict get $options size] "field button \"$name\""
+    dict set options size \
+        [my FieldSize [dict get $options size] "field button \"$name\""]
     # The caption's font, settled HERE. [FieldFont] refuses a family that
     # does not resolve, registers the resource so the appearance stream and
     # the /DA name the same thing, and hands back both halves - the same
@@ -754,6 +756,11 @@ oo::define ::tclpdf::document::document {
   # stream at write time that nobody is looking at.
   method FieldButtonCommon {options what} {
     variable ::tclpdf::fieldButton::marks
+    # The numbers of the three types read in decimal before anything checks
+    # them (pdfObj.tcl, [decimal]): -markSize 08 is eight under Tcl 8.6 as
+    # under Tcl 9. The callers go on with the dictionary this returns.
+    set options [::tclpdf::option decimals $options \
+        {rect page size markSize borderWidth}]
     if {[dict get $options mark] ni $marks} {
       return -code error -errorcode \
           [list TCLPDF FIELD BUTTON MARK [dict get $options mark]] \
@@ -1044,4 +1051,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::fieldButton 1.2
+package provide tclpdf::fieldButton 1.3

@@ -168,7 +168,7 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::io 1.0-
 package require tclpdf::document 1.0-
 
@@ -1357,6 +1357,9 @@ proc ::tclpdf::sign::add {path args} {
     signer {} size 16384 name {} reason {} location {} contact {}
     date now field {} page 0 subfilter pkcs7
   } $args "sign add"]
+  # The numbers read in decimal before they are checked (pdfObj.tcl,
+  # [decimal]): -page 010 is the eleventh page under Tcl 8.6 as under Tcl 9.
+  set options [::tclpdf::option decimals $options {size page}]
   set subFilter [SubFilter [dict get $options subfilter] "sign add"]
   set size [Size [dict get $options size] "sign add"]
   set page [PageIndex [dict get $options page] "sign add"]
@@ -1926,6 +1929,10 @@ oo::define ::tclpdf::document::document {
       date now field Signature1 page 0 subfilter pkcs7 rect {} appearance {}
       tooltip {} contents {}
     } $args "sign"]
+    # The numbers read in decimal before they are checked (pdfObj.tcl,
+    # [decimal]). The numbers of a document being signed are read where it
+    # is read.
+    set options [::tclpdf::option decimals $options {size page rect}]
 
     # Which /SubFilter, how much room, which page and what the signer is:
     # the four checks [::tclpdf::sign add] makes word for word, and they are
@@ -2443,4 +2450,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::sign 1.8
+package provide tclpdf::sign 1.9

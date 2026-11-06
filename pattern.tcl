@@ -28,9 +28,10 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::filter 1.0-
-package require tclpdf::geometry 1.0-
+# 1.8 for a -matrix read in decimal by [geometry check].
+package require tclpdf::geometry 1.8-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::pattern {}
@@ -58,6 +59,9 @@ oo::define ::tclpdf::document::document {
     set options [::tclpdf::option parse {
       size {} step {} script {} unit {} matrix {} origin {}
     } $args "pattern create"]
+    # The numbers read in decimal before anything checks them (pdfObj.tcl,
+    # [decimal]); -matrix reads its own in [geometry check].
+    set options [::tclpdf::option decimals $options {size step origin}]
     if {[dict get $options size] eq {}} {
       return -code error -errorcode [list TCLPDF PATTERN ARGUMENT size] \
           "tclpdf: pattern create needs -size {width height}"
@@ -348,4 +352,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pattern 1.8
+package provide tclpdf::pattern 1.9

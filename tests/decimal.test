@@ -1,0 +1,415 @@
+# decimal.test --
+#
+# A number a caller writes with a leading zero is read in DECIMAL, under
+# Tcl 8.6 as under Tcl 9: 010 is ten, 08 is eight, and the file a call with
+# 010 writes is byte for byte the file the same call with 10 writes.
+#
+# Tcl 8.6 reads an integer with a leading zero as octal - "010" is 8 to
+# [expr], [format %d], [string is integer] and "==" - and "08" as no number
+# at all; Tcl 9 reads both in decimal. Measured 2026-11-06 under 8.6.18 and
+# 9.0.4 before the reading was added: "text X -at {010 20}" wrote "8 ... Td"
+# under one and "10 ... Td" under the other.
+#
+# Two parts: the reader itself ([pdfObj decimal], [option decimals] and the
+# gates that use them), including everything it must hand on UNCHANGED; and
+# one call per option a caller writes, compared as whole files. The second
+# part fails under Tcl 8.6 on a tree without the reading - that is what the
+# tests are for - and passes under Tcl 9 either way.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::pdfObj
+package require tclpdf::option
+package require tclpdf::geometry
+source [file join [file dirname [info script]] helper.tcl]
+
+namespace eval ::decimalTest {
+  variable root [file dirname [file dirname [file normalize [info script]]]]
+  variable fonts [file join $root examples assets fonts]
+}
+
+# The bytes of a document made by SCRIPT, which sees the document as $doc.
+# Uncompressed, so a difference shows in the content, and with a fixed
+# creation date and file identifier, so two documents made a second apart
+# are the same file.
+proc ::decimalTest::bytes {script {options {}}} {
+  set doc [tclpdf new -compress 0 -unit pt {*}$options]
+  $doc info CreationDate "D:20260101000000+01'00'"
+  [$doc writer] id [string repeat \x01 16]
+  try {
+    $doc page add
+    uplevel 1 [list set doc $doc]
+    uplevel 1 $script
+    set path [::tclpdfTest::scratch decimal-[pid].pdf]
+    $doc write $path
+    set result [::tclpdfTest::readBytes $path]
+    file delete $path
+  } finally {
+    $doc destroy
+  }
+  return $result
+}
+
+# Whether the two scripts write the same file. "same" when they do, and
+# otherwise the first line of the file where they part - which is what a
+# failure has to show.
+proc ::decimalTest::same {leading plain {options {}}} {
+  set a [uplevel 1 [list ::decimalTest::bytes $leading $options]]
+  set b [uplevel 1 [list ::decimalTest::bytes $plain $options]]
+  if {$a eq $b} {
+    return same
+  }
+  foreach x [split $a \n] y [split $b \n] {
+    if {$x ne $y} {
+      return [list differ $x $y]
+    }
+  }
+  return differ
+}
+
+# What a script answers, or its -errorcode where it is refused.
+proc ::decimalTest::outcome {script} {
+  if {[catch {uplevel 1 $script} result options]} {
+    return [list error [dict get $options -errorcode]]
+  }
+  return [list ok $result]
+}
+
+#
+# --- the reader -------------------------------------------------------------
+#
+
+test decimal-1.1 {a leading zero is read away, nothing else is touched} -body {
+  lmap value {010 08 09 0010 000 00 -08 +010 -007 00.5 0012.5 0012.50 08e1
+      00. 0100} {
+    ::tclpdf::pdfObj decimal $value
+  }
+} -result {10 8 9 10 0 0 -8 +10 -7 0.5 12.5 12.50 8e1 0. 100}
+
+test decimal-1.2 {everything that is not a decimal literal comes back as written} -body {
+  set values [list 0x1A 0X1a 0o17 0b101 -0x1A NaN Inf -Inf 1e3 10 0 -0 +0 \
+      0.5 .5 -.5 0e5 0. {} abc 08abc 00x1 { 5} { 010} {010 } "010\n" 0,5 \
+      {010 20} max auto]
+  set changed {}
+  foreach value $values {
+    if {[::tclpdf::pdfObj decimal $value] ne $value} {
+      lappend changed $value
+    }
+  }
+  set changed
+} -result {}
+
+test decimal-1.3 {the reading is text: no number comes back in another spelling} -body {
+  # [expr] would answer 10.0, 1000.0 or 12.5 - the trailing zero of a
+  # fraction and the exponent stay as the caller wrote them.
+  list [::tclpdf::pdfObj decimal 010.0] [::tclpdf::pdfObj decimal 01e3] \
+      [::tclpdf::pdfObj decimal 012.50]
+} -result {10.0 1e3 12.50}
+
+test decimal-1.4 {pdfObj num and written read in decimal} -body {
+  list [::tclpdf::pdfObj num 010] [::tclpdf::pdfObj num 08] \
+      [::tclpdf::pdfObj num -010.5] [::tclpdf::pdfObj written 08] \
+      [::tclpdf::pdfObj num 0x10]
+} -result {10 8 -10.5 8.0 16}
+
+test decimal-1.5 {pdfObj fits and option finite stay predicates on the value as written} -body {
+  # A yes for "08" would send a caller on to compute with "08", which Tcl 8.6
+  # refuses as an operand - so the reading is the caller's, before the
+  # question. The answer is the same under both interpreters for a value
+  # read first.
+  list [::tclpdf::option finite [::tclpdf::pdfObj decimal 08]] \
+      [::tclpdf::pdfObj fits [::tclpdf::pdfObj decimal 09]]
+} -result {1 1}
+
+test decimal-2.1 {option decimals reads the named keys and only those} -body {
+  ::tclpdf::option decimals {size {010 08} name 0012 width 09 at {}} \
+      {size width at missing}
+} -result {size {10 8} name 0012 width 9 at {}}
+
+test decimal-2.2 {nested lists are read to the bottom, words stay words} -body {
+  ::tclpdf::option decimals {
+    points {{010 20} {30 040}}
+    avoid {{rect {010 20} {030 40}} {circle {05 5} 02 01}}
+    segments {{M 010 10} {L 020 020}}
+  } {points avoid segments}
+} -result {points {{10 20} {30 40}} avoid {{rect {10 20} {30 40}} {circle {5 5} 2 1}} segments {{M 10 10} {L 20 20}}}
+
+test decimal-2.3 {a dictionary without a leading zero comes back as it went in} -body {
+  set options "size {10   20} width 3 fit {}"
+  expr {[::tclpdf::option decimals $options {size width fit}] eq $options}
+} -result 1
+
+test decimal-2.4 {a value that is no list is left for the check behind it} -body {
+  set options [dict create size "\{010 20" width 0x10]
+  expr {[::tclpdf::option decimals $options {size width}] eq $options}
+} -result 1
+
+test decimal-3.1 {option point, number and zoom answer the value read} -body {
+  list [::tclpdf::option point {010 08} -at test] \
+      [::tclpdf::option number 0100 -width test] \
+      [::tclpdf::option zoom 02 -zoom test] \
+      [::tclpdf::option point {10 20} -at test]
+} -result {{10 8} 100 2 {10 20}}
+
+test decimal-3.2 {and still refuse what they refused, quoting the caller} -body {
+  list [::tclpdfTest::refusal {::tclpdf::option point {0x1G 08} -at test}] \
+      [::tclpdfTest::refusal {::tclpdf::option number NaN -width test}] \
+      [catch {::tclpdf::option point {08 abc} -at test} message] $message
+} -result {{TCLPDF OPTION POINT -at test} {TCLPDF OPTION NUMBER -width test} 1 {tclpdf: -at takes two numbers {x y}, got "08 abc" - for a computed position use [list $x $y], braces do not substitute}}
+
+test decimal-3.3 {geometry toPoints and check read in decimal} -body {
+  list [::tclpdf::geometry toPoints 010 pt] [::tclpdf::geometry toPoints 08 in] \
+      [::tclpdf::geometry check {010 0 0 08 0 0} test] \
+      [::tclpdfTest::refusal {::tclpdf::geometry toPoints 0x1G pt}]
+} -result {10.0 576.0 {10 0 0 8 0 0} {TCLPDF GEOMETRY MEASURE 0x1G}}
+
+test decimal-3.4 {0x stays hexadecimal} -body {
+  ::tclpdf::geometry toPoints 0x10 pt
+} -result 16.0
+
+#
+# --- every option a caller writes, as a whole file ------------------------
+#
+
+test decimal-4.1 {text -at {010 20}} -body {
+  ::decimalTest::same {$doc text X -at {010 20}} {$doc text X -at {10 20}}
+} -result same
+
+test decimal-4.2 {text -at {08 20} is a position, not a refusal} -body {
+  ::decimalTest::same {$doc text X -at {08 20}} {$doc text X -at {8 20}}
+} -result same
+
+test decimal-4.3 {rect -at and -size} -body {
+  ::decimalTest::same {$doc rect -at {010 010} -size {010 020} -fill red} \
+      {$doc rect -at {10 10} -size {10 20} -fill red}
+} -result same
+
+test decimal-4.4 {line -width 08 and -dash {010 2}} -body {
+  ::decimalTest::same \
+      {$doc line -from {10 50} -to {60 50} -stroke black -width 08 -dash {010 02}} \
+      {$doc line -from {10 50} -to {60 50} -stroke black -width 8 -dash {10 2}}
+} -result same
+
+test decimal-4.5 {font -size 010} -body {
+  ::decimalTest::same {$doc font -size 010; $doc text X -at {10 20}} \
+      {$doc font -size 10; $doc text X -at {10 20}}
+} -result same
+
+test decimal-4.6 {page add -format {0210 0297} and -rotate 090} -body {
+  ::decimalTest::same {$doc page add -format {0210 0297} -rotate 090} \
+      {$doc page add -format {210 297} -rotate 90}
+} -result same
+
+test decimal-4.7 {bookmark -page 010 and 08} -body {
+  set make {
+    for {set i 0} {$i < 10} {incr i} {$doc page add}
+    $doc bookmark Ten -page %s
+    $doc bookmark Eight -page %s
+  }
+  ::decimalTest::same [format $make 010 08] [format $make 10 8]
+} -result same
+
+test decimal-4.8 {pageLabels -from 010 sorts after 9, -start 010 is /St 10} -body {
+  set make {
+    for {set i 0} {$i < 11} {incr i} {$doc page add}
+    $doc pageLabels -from 0 -style D
+    $doc pageLabels -from %s -style r
+    $doc pageLabels -from %s -style A -start %s
+  }
+  ::decimalTest::same [format $make 09 010 010] [format $make 9 10 10]
+} -result same
+
+test decimal-4.9 {pageNumbers -total 010} -body {
+  ::decimalTest::same \
+      {$doc pageNumbers -at {105 285} -format "%n/%m" -total 010} \
+      {$doc pageNumbers -at {105 285} -format "%n/%m" -total 10}
+} -result same
+
+test decimal-4.10 {field listbox -index 010} -body {
+  set make {$doc field listbox lb -rect {20 40 80 30} \
+      -options {a b c d e f g h i j k l} -index %s}
+  ::decimalTest::same [format $make 010] [format $make 10]
+} -result same
+
+test decimal-4.11 {field text -maxlen 010 and 08} -body {
+  list [::decimalTest::same {$doc field text f -rect {20 40 80 8} -maxlen 010} \
+      {$doc field text f -rect {20 40 80 8} -maxlen 10}] \
+      [::decimalTest::same {$doc field text f -rect {20 40 80 8} -maxlen 08} \
+      {$doc field text f -rect {20 40 80 8} -maxlen 8}]
+} -result {same same}
+
+test decimal-4.12 {field -rect, -size and -borderWidth} -body {
+  ::decimalTest::same \
+      {$doc field text f -rect {020 040 080 08} -size 010 -borderWidth 01} \
+      {$doc field text f -rect {20 40 80 8} -size 10 -borderWidth 1}
+} -result same
+
+test decimal-4.13 {link -at, -size, -page, -to and -zoom} -body {
+  set make {
+    $doc page add
+    $doc link -at {%s 40} -size {040 5} -page %s -to {010 010} -zoom %s
+  }
+  ::decimalTest::same [format $make 020 01 02] [format $make 20 1 2]
+} -result same
+
+test decimal-4.14 {table -width 0100, -repeatColumns 01 and a colSpan of 02} -body {
+  set make {$doc table -at {20 30} -width %s -repeatColumns %s \
+      -body {{a b c} {{text wide colSpan %s} d}}}
+  ::decimalTest::same [format $make 0100 01 02] [format $make 100 1 2]
+} -result same
+
+test decimal-4.15 {a paragraph: -at, -width and -indent} -body {
+  # -at of a paragraph is read where the block is laid out, not where a
+  # single line is placed - it came out at 16 for 020 under Tcl 8.6 while
+  # the single line was already right.
+  set make {$doc text "one two three four five six seven" -at {%s 20} \
+      -width %s -indent %s}
+  ::decimalTest::same [format $make 020 080 05] [format $make 20 80 5]
+} -result same
+
+test decimal-4.16 {polygon -points} -body {
+  ::decimalTest::same \
+      {$doc polygon -points {010 020 030 040 050 08} -fill red} \
+      {$doc polygon -points {10 20 30 40 50 8} -fill red}
+} -result same
+
+test decimal-4.17 {transform -translate and -rotate} -body {
+  ::decimalTest::same \
+      {$doc transform -translate {010 0} -rotate 090; $doc rect -at {0 0} -size {5 5}} \
+      {$doc transform -translate {10 0} -rotate 90; $doc rect -at {0 0} -size {5 5}}
+} -result same
+
+test decimal-4.18 {image place -at and -width} -body {
+  set png [::tclpdfTest::png 2 1 8 0 [binary format cucucu 0 0x40 0xC0]]
+  set make {$doc image embed px -data $png; $doc image place px -at {%s 20} -width %s}
+  ::decimalTest::same [format $make 010 040] [format $make 10 40]
+} -result same
+
+test decimal-4.19 {annot square -at and -size} -body {
+  ::decimalTest::same {$doc annot square -at {010 020} -size {030 010}} \
+      {$doc annot square -at {10 20} -size {30 10}}
+} -result same
+
+test decimal-4.20 {tclpdf new -typeArea} -body {
+  # The type area is what a page answers and what -height max fills; asked
+  # of the page, because a single line does not reach its edge.
+  set answers {}
+  foreach area {{020 020 010 08} {20 20 10 8}} {
+    set doc [tclpdf new -unit mm -typeArea $area]
+    $doc page add
+    lappend answers [$doc page typeArea]
+    $doc destroy
+  }
+  expr {[lindex $answers 0] eq [lindex $answers 1]}
+} -result 1
+
+test decimal-4.21 {initialView -page 01 -zoom 02, viewerPreferences -numCopies 02} -body {
+  set make {
+    $doc page add
+    $doc initialView -page %s -zoom %s
+    $doc viewerPreferences -numCopies %s
+  }
+  ::decimalTest::same [format $make 01 02 02] [format $make 1 2 2]
+} -result same
+
+test decimal-4.22 {a page index: page size 010 and page size 08} -body {
+  set doc [tclpdf new -unit mm]
+  for {set i 0} {$i < 11} {incr i} {$doc page add -format [list [expr {100 + $i}] 200]}
+  set answers [list [$doc page size 010] [$doc page size 10] \
+      [$doc page size 08] [$doc page size 8]]
+  $doc destroy
+  expr {[lindex $answers 0] eq [lindex $answers 1]
+      && [lindex $answers 2] eq [lindex $answers 3]}
+} -result 1
+
+# Setting a box answers the box as it was read, as [option point] and
+# [geometry check] answer their values. Measured 2026-11-06: the file was
+# already the same, but the answer to {010 010 0190 0277} was those words
+# unchanged, under Tcl 8.6 as under Tcl 9.
+test decimal-4.23 {page box answers the box read in decimal} -body {
+  set answers {}
+  foreach box {{010 010 0190 0277} {10 10 190 277} {08 09 0190 0277}} {
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    lappend answers [$doc page box crop $box]
+    $doc destroy
+  }
+  set answers
+} -result {{10 10 190 277} {10 10 190 277} {8 9 190 277}}
+
+#
+# --- the font and the hyphenation options -----------------------------------
+#
+
+test decimal-5.1 {font embed -face 09 of a collection is face 9} -setup {
+  set regular [::tclpdfTest::readBytes [file join $::decimalTest::fonts DejaVuSans.ttf]]
+  set bold [::tclpdfTest::readBytes [file join $::decimalTest::fonts DejaVuSans-Bold.ttf]]
+  set faces [lrepeat 9 $regular]
+  lappend faces $bold
+  set ttc [::tclpdfTest::scratch decimal-[pid].ttc]
+  set channel [open $ttc wb]
+  puts -nonewline $channel [::tclpdfTest::collection $faces]
+  close $channel
+} -body {
+  set make {$doc font embed x $ttc -face %s; $doc font -family x; $doc text A -at {10 10}}
+  list [::decimalTest::same [format $make 09] [format $make 9]] \
+      [::decimalTest::outcome [list ::decimalTest::bytes [format $make 010]]] \
+      [::decimalTest::outcome [list ::decimalTest::bytes [format $make 10]]]
+} -cleanup {
+  file delete $ttc
+} -result {same {error {TCLPDF FONT FACE 10}} {error {TCLPDF FONT FACE 10}}}
+
+test decimal-5.2 {font embed -axes {wght 0700} is the bold instance} -body {
+  set path [file join $::decimalTest::fonts google Roboto-Variable.ttf]
+  set make {$doc font embed x $path -axes {wght %s}; $doc font -family x; $doc text A -at {10 10}}
+  ::decimalTest::same [format $make 0700] [format $make 700]
+} -result same
+
+test decimal-5.3 {hyphenate load -left 010 -right 02} -setup {
+  package require tclpdf::hyphenate
+  set dic [file join [file dirname $::decimalTest::fonts] languages hyph_en_US.dic]
+  # The package has no unload; the table is put back as it was, so that a
+  # test file run after this one in the same interpreter does not find the
+  # three tags.
+  set saved $::tclpdf::hyphenate::loaded
+} -body {
+  ::tclpdf::hyphenate load decimal-a $dic -left 010 -right 02
+  ::tclpdf::hyphenate load decimal-b $dic -left 10 -right 2
+  ::tclpdf::hyphenate load decimal-c $dic -left 08
+  set a [::tclpdf::hyphenate languages decimal-a]
+  set b [::tclpdf::hyphenate languages decimal-b]
+  list [expr {[dict get $a left] eq [dict get $b left]
+          && [dict get $a right] eq [dict get $b right]}] \
+      [expr {[::tclpdf::hyphenate word decimal-a algorithmically]
+          eq [::tclpdf::hyphenate word decimal-b algorithmically]}] \
+      [dict get [::tclpdf::hyphenate languages decimal-c] left]
+} -cleanup {
+  set ::tclpdf::hyphenate::loaded $saved
+} -result {1 1 8}
+
+# TCLPDF FONT FACE and TCLPDF COLORFONT FACE carry *asked*, "the value as it
+# was written" (doc/tclpdf.md) - the reading in decimal must not reach the
+# refusal. Measured 2026-11-06: before this test "-face -01" was refused as
+# "-1" by both, where 1.7.2 had said "-01".
+test decimal-5.4 {a refused -face is quoted as written} -body {
+  set path [file join $::decimalTest::fonts DejaVuSans.ttf]
+  set doc [tclpdf new]
+  $doc page add
+  set result {}
+  foreach face {-01 -00.5} {
+    lappend result [::decimalTest::outcome [list $doc font embed x $path -face $face]]
+    lappend result [::decimalTest::outcome \
+        [list $doc colorFont c $path -chars A -face $face]]
+  }
+  $doc destroy
+  set result
+} -result {{error {TCLPDF FONT FACE -01}} {error {TCLPDF COLORFONT FACE -01}} {error {TCLPDF FONT FACE -00.5}} {error {TCLPDF COLORFONT FACE -00.5}}}
+
+cleanupTests

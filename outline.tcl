@@ -23,7 +23,7 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::outline {}
@@ -37,6 +37,9 @@ oo::define ::tclpdf::document::document {
     set options [::tclpdf::option parse {
       page {} at {} parent {} open 1 structure {}
     } $args "bookmark"]
+    # The numbers read in decimal before they are checked (pdfObj.tcl,
+    # [decimal]): -page 010 is the eleventh page under Tcl 8.6 as under 9.
+    set options [::tclpdf::option decimals $options {page at}]
     # A BOOLEAN AT THE CALL, not at the write. [OutlineWrite] computes
     # "[dict get $entry open] ? $count : -$count", so an -open that is no
     # boolean died there, hours later, in Tcl's own words ("expected boolean
@@ -242,4 +245,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::outline 1.7
+package provide tclpdf::outline 1.8

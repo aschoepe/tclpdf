@@ -46,11 +46,16 @@ package require Tcl 8.6.11-
 # the one-way street it is meant to be, and the range a file can hold is
 # asked HERE, at the call, instead of at the moment of writing - by which
 # time a "q", a "BT" or a marked-content bracket is already out.
-package require tclpdf::pdfObj 1.0-
+package require tclpdf::pdfObj 1.9-
 
 namespace eval ::tclpdf::option {
   namespace export {[a-z]*}
   namespace ensemble create
+
+  # A word that begins with a zero followed by a digit, optionally signed -
+  # what [decimals] looks for before it takes anything apart. It may find
+  # more than a number (a word inside a text value), never less.
+  variable leadingZero {(?:^|[\s\{"])[-+]?0[0-9]}
 }
 
 # Read -name value pairs over a dictionary of defaults.
@@ -133,6 +138,63 @@ proc ::tclpdf::option::keys {value known what {context {}}} {
   return $value
 }
 
+# The numbers of an options dictionary, read in decimal.
+#
+#   set options [::tclpdf::option decimals $options {size width points}]
+#
+# Every number of each named key goes through [pdfObj decimal], so a -size
+# of {010 08} comes back as {10 8} - under Tcl 8.6 as under Tcl 9 - and a
+# word that is no decimal number ("auto", "max", "rect", "0x1A", "NaN") comes
+# back as it was, for the check behind this to refuse or accept as before.
+# NESTED LISTS ARE READ TO THE BOTTOM: -points {{010 20} {30 40}}, the
+# segments of a path and the shapes of -avoid hold their numbers one or two
+# levels down, and each of them is a word of its own there. A key that is
+# absent or empty is left alone, and so is a value that is not a list at all;
+# the value is rebuilt only when one of its numbers changed, so a dictionary
+# without a leading zero comes back as it went in.
+#
+# ONLY FOR KEYS THAT ARE NUMBERS. A key that can carry text - a field name,
+# an export value, a label - has no business in the list: "0012" is a name
+# there, not twelve.
+#
+# Here rather than per module: fetch, map, compare and write back would
+# otherwise stand at every command that reads a number out of its options,
+# and the reading itself stays in one place, [pdfObj decimal].
+#
+# THE COMMON CASE COSTS ONE [regexp]: a dictionary in which no word begins
+# with a zero followed by a digit has nothing to read, and every text call
+# of a table cell comes through here - measured 2026-11-06, 2514 calls for
+# the four tables of examples/04.01. The same question is asked of each key
+# before its value is taken apart.
+proc ::tclpdf::option::decimals {options keys} {
+  variable leadingZero
+  if {![regexp $leadingZero $options]} {
+    return $options
+  }
+  foreach key $keys {
+    if {![dict exists $options $key]} {
+      continue
+    }
+    set value [dict get $options $key]
+    if {![regexp $leadingZero $value] || [catch {Decimals $value} read]} {
+      continue
+    }
+    if {$read ne $value && $read ne [list {*}$value]} {
+      dict set options $key $read
+    }
+  }
+  return $options
+}
+
+# One value of [decimals], to the bottom of its nesting: a single word is
+# read, a list is read element by element.
+proc ::tclpdf::option::Decimals {value} {
+  if {[llength $value] == 1 && [lindex $value 0] eq $value} {
+    return [::tclpdf::pdfObj::decimal $value]
+  }
+  return [lmap item $value {Decimals $item}]
+}
+
 # A point option: two numbers, or an error that names the likely mistake.
 #
 # Checked rather than left to lassign, because writing -at {20 [expr {$y+5}]}
@@ -143,15 +205,32 @@ proc ::tclpdf::option::keys {value known what {context {}}} {
 # Here rather than in text.tcl: the second caller made it a copy, and a copy of
 # an error message is how two commands come to explain the same mistake
 # differently.
+#
+# THE VALUE TO GO ON WITH IS THE ONE THIS RETURNS: each coordinate read in
+# decimal ([pdfObj decimal]), so {010 08} answers {10 8} under Tcl 8.6 as
+# under Tcl 9. A caller that computes with what it handed in instead reads
+# 010 as eight under 8.6.
 proc ::tclpdf::option::point {value option context} {
   if {$value eq {}} {
     return -code error \
         -errorcode [list TCLPDF OPTION REQUIRED $option $context] \
         "tclpdf: $context needs $option {x y}"
   }
-  if {[catch {llength $value} count] || $count != 2
-      || ![string is double -strict [lindex $value 0]]
-      || ![string is double -strict [lindex $value 1]]} {
+  # The refusals below quote the value as the caller wrote it; the checks
+  # and the answer use it read in decimal. Rebuilt only when a coordinate
+  # changed, so a value without a leading zero comes back as it went in.
+  set point $value
+  if {![catch {llength $value} count] && $count == 2} {
+    lassign $value x y
+    set readX [::tclpdf::pdfObj::decimal $x]
+    set readY [::tclpdf::pdfObj::decimal $y]
+    if {$readX ne $x || $readY ne $y} {
+      set point [list $readX $readY]
+    }
+  }
+  if {[catch {llength $point} count] || $count != 2
+      || ![string is double -strict [lindex $point 0]]
+      || ![string is double -strict [lindex $point 1]]} {
     return -code error -errorcode [list TCLPDF OPTION POINT $option $context] \
         "tclpdf: $option takes two numbers {x y}, got\
         \"$value\" - for a computed position use \[list \$x \$y\], braces do\
@@ -163,7 +242,7 @@ proc ::tclpdf::option::point {value option context} {
   # own, a division by a width that was zero being the usual way. Same code:
   # it is the same option that is wrong, and a handler trapping
   # TCLPDF OPTION POINT wants both.
-  foreach coordinate $value {
+  foreach coordinate $point {
     if {![finite $coordinate]} {
       return -code error \
           -errorcode [list TCLPDF OPTION POINT $option $context] \
@@ -184,7 +263,7 @@ proc ::tclpdf::option::point {value option context} {
           Annex C.2)"
     }
   }
-  return $value
+  return $point
 }
 
 # The magnification of an /XYZ destination (12.3.2.2, Table 151).
@@ -200,14 +279,17 @@ proc ::tclpdf::option::point {value option context} {
 # one - had neither (measured 2026-08-26: "destination 0 -to {10 10} -zoom -1"
 # wrote /XYZ 28.35 811 -1). "context" and "option" name the call, as
 # everywhere in this module, so the message says which of the three was wrong.
+#
+# Read in decimal first and answered as read, as [number] below does.
 proc ::tclpdf::option::zoom {value option context} {
-  if {![finite $value] || $value < 0} {
+  set read [::tclpdf::pdfObj::decimal $value]
+  if {![finite $read] || $read < 0} {
     return -code error -errorcode [list TCLPDF OPTION ZOOM $option $context] \
         "tclpdf: $option is a magnification of 0 or more -\
         0 means the magnification the reader is already at (ISO 32000-2,\
         12.3.2.2, Table 151) - not \"$value\""
   }
-  return $value
+  return $read
 }
 
 # Is this a number something can be MEASURED in?
@@ -234,6 +316,12 @@ proc ::tclpdf::option::zoom {value option context} {
 # throw the very error it is meant to replace. Comparison is defined for it -
 # NaN is the one value not equal to itself (IEEE 754) - and the two bounds
 # catch Inf and -Inf, which compare perfectly well and place nothing.
+#
+# A PREDICATE, AND IT READS THE VALUE AS IT STANDS - no [pdfObj decimal]
+# here. A yes for "08" would send the caller on to compute with "08", which
+# Tcl 8.6 refuses as an operand and compares as a string; the value a caller
+# goes on with has to be the one it read in decimal, so the reading happens
+# at the caller, before this is asked.
 proc ::tclpdf::option::finite {value} {
   if {![string is double -strict $value]} {
     return 0
@@ -249,8 +337,13 @@ proc ::tclpdf::option::finite {value} {
 # moment a number is written, and it stays where it is - it also catches a
 # perfectly finite value beyond the PDF real range, which is a different
 # mistake. This one is made at the call, before anything is written.
+#
+# The value comes back READ IN DECIMAL ([pdfObj decimal]): "010" answers
+# "10" under Tcl 8.6 as under Tcl 9, and "08" is a number rather than a
+# refusal. A caller that goes on with the value takes it from here.
 proc ::tclpdf::option::number {value what {context {}}} {
-  if {![finite $value]} {
+  set read [::tclpdf::pdfObj::decimal $value]
+  if {![finite $read]} {
     return -code error -errorcode [list TCLPDF OPTION NUMBER $what $context] \
         "tclpdf: $what[Where $context] is a finite number, not \"$value\" -\
         NaN and Inf are doubles to Tcl and place nothing on a page"
@@ -262,13 +355,13 @@ proc ::tclpdf::option::number {value what {context {}}} {
   # the refusal was left with a "q" without its "Q" and a mark without its
   # end. Measured 2026-08-26: "rect -at {1e39 20}" wrote its style and its
   # bracket before dying.
-  if {![::tclpdf::pdfObj fits $value]} {
+  if {![::tclpdf::pdfObj fits $read]} {
     return -code error -errorcode [list TCLPDF OPTION NUMBER $what $context] \
         "tclpdf: $what[Where $context] is \"$value\", which is beyond what a\
         PDF number holds - a real carries about +/-3.403e38 (ISO 32000-1,\
         Annex C.2)"
   }
-  return $value
+  return $read
 }
 
 proc ::tclpdf::option::Where {context} {
@@ -278,4 +371,4 @@ proc ::tclpdf::option::Where {context} {
   return " for $context"
 }
 
-package provide tclpdf::option 1.3
+package provide tclpdf::option 1.4

@@ -115,7 +115,7 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::color 1.0-
 package require tclpdf::geometry 1.0-
 package require tclpdf::document 1.0-
@@ -320,6 +320,9 @@ oo::define ::tclpdf::document::document {
       at {} size {} contents {} title {} icon Note colour {} color {}
       open 0 opacity {} appearance {} date {}
     } $args "annot note"]
+    # The numbers read in decimal before anything checks them (pdfObj.tcl,
+    # [decimal]): -at {010 20} is ten under Tcl 8.6 as under Tcl 9.
+    set options [::tclpdf::option decimals $options {at size opacity date}]
     set options [my AnnotColourOption $options "annot note"]
     if {[dict get $options at] eq {}} {
       return -code error -errorcode {TCLPDF ANNOT NOTE AT} \
@@ -384,6 +387,7 @@ oo::define ::tclpdf::document::document {
       at {} size {} name {} contents {} title {} colour {} color {}
       opacity {} appearance {} date {}
     } $args "annot stamp"]
+    set options [::tclpdf::option decimals $options {at size opacity date}]
     set options [my AnnotColourOption $options "annot stamp"]
     if {[dict get $options at] eq {}} {
       return -code error -errorcode {TCLPDF ANNOT STAMP AT} \
@@ -954,4 +958,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::annot 1.3
+package provide tclpdf::annot 1.4

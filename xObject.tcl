@@ -36,7 +36,7 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::filter 1.0-
 package require tclpdf::geometry 1.0-
 package require tclpdf::graphics 1.0-
@@ -67,6 +67,8 @@ oo::define ::tclpdf::document::document {
   method FormCreate {name args} {
     set options [::tclpdf::option parse {size {} script {} unit {}} $args \
         "form create"]
+    # Read in decimal before it is checked (pdfObj.tcl, [decimal]).
+    set options [::tclpdf::option decimals $options {size}]
     if {[dict get $options size] eq {}} {
       return -code error -errorcode [list TCLPDF FORM ARGUMENT size] \
           "tclpdf: form create needs -size {width height}"
@@ -183,6 +185,9 @@ oo::define ::tclpdf::document::document {
     set options [::tclpdf::option parse \
         {at {} scale {} rotate 0 opacity {} alt {} artifact {} fit {} \
             fitMode {} align left valign top} $args "form place"]
+    # The numbers read in decimal before anything checks or composes them
+    # (pdfObj.tcl, [decimal]).
+    set options [::tclpdf::option decimals $options {at scale rotate opacity fit}]
     set forms [my state forms]
     if {![dict exists $forms $name]} {
       return -code error -errorcode [list TCLPDF FORM NAME $name] \
@@ -471,4 +476,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::xObject 1.8
+package provide tclpdf::xObject 1.9

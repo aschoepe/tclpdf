@@ -54,8 +54,8 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::pdfObj 1.9-
+package require tclpdf::option 1.4-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::viewerPreferences {
@@ -175,7 +175,9 @@ oo::define ::tclpdf::document::document {
         # "positive integer" used to be the rule here, and the value went
         # into the file to be ignored at the recipient. Whole digits only:
         # 0x3 and 2.0 are integers to [string is integer] and not to a
-        # reader.
+        # reader. A leading zero is read away first (pdfObj.tcl, [decimal]):
+        # 02 is two copies, and is written as 2.
+        set value [::tclpdf::pdfObj decimal $value]
         if {![regexp {^[2-5]$} $value]} {
           return -code error -errorcode [list TCLPDF VIEWERPREFERENCES ARGUMENT numCopies] \
               "tclpdf: viewerPreferences -numCopies takes an\
@@ -274,6 +276,9 @@ oo::define ::tclpdf::document::document {
     }
     set options [::tclpdf::option parse \
         {pageMode {} pageLayout {} page {} to {} zoom {}} $args "initialView"]
+    # The numbers read in decimal before they are checked (pdfObj.tcl,
+    # [decimal]): -page 010 is the eleventh page under Tcl 8.6 as under 9.
+    set options [::tclpdf::option decimals $options {page to zoom}]
     # EVERYTHING IS CHECKED BEFORE ANYTHING IS WRITTEN - the same order every
     # method of this package keeps. A call that names a good -pageMode and a
     # misspelt -pageLayout must leave the catalogue as it was, or the
@@ -378,4 +383,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::viewerPreferences 1.5
+package provide tclpdf::viewerPreferences 1.6

@@ -41,9 +41,11 @@
 
 package require Tcl 8.6.11-
 package require tclpdf::option 1.0-
-package require tclpdf::geometry 1.0-
-package require tclpdf::pdfObj 1.0-
-package require tclpdf::document 1.0-
+# 1.8 for the lengths and -format read in decimal by [geometry toPoints].
+package require tclpdf::geometry 1.8-
+package require tclpdf::pdfObj 1.9-
+# 1.17 for a -typeArea the document stores read in decimal.
+package require tclpdf::document 1.17-
 
 oo::define ::tclpdf::document::document {
 
@@ -138,6 +140,10 @@ oo::define ::tclpdf::document::document {
     if {$rotate eq {}} {
       set rotate 0
     }
+    # Read in decimal (pdfObj.tcl, [decimal]): 090 is ninety degrees under
+    # Tcl 8.6 as under Tcl 9. -format reaches [geometry toPoints], which
+    # reads its own numbers.
+    set rotate [::tclpdf::pdfObj decimal $rotate]
     # Asked BEFORE the modulo, which is where an empty string or a word used
     # to die as "can't use empty string as operand of %" - a raw Tcl error
     # where this package promises a message of its own.
@@ -291,6 +297,15 @@ oo::define ::tclpdf::document::document {
     }
     dict set page boxes $name $box
     lset tclpdfPages $position $page
+    # The answer is the box as it was READ, each corner in decimal (pdfObj.tcl,
+    # [decimal]), as [option point] and [geometry check] answer: {010 010
+    # 0190 0277} comes back as {10 10 190 277}, the box the file holds, under
+    # Tcl 8.6 as under Tcl 9. Rebuilt only when a corner changed, so a box
+    # without a leading zero comes back as it went in.
+    set read [lmap number $value {::tclpdf::pdfObj decimal $number}]
+    if {$read ne [list {*}$value]} {
+      return $read
+    }
     return $value
   }
 
@@ -494,6 +509,10 @@ oo::define ::tclpdf::document::document {
     if {$index eq {}} {
       set index $tclpdfCurrent
     }
+    # Read in decimal (pdfObj.tcl, [decimal]): page 010 is the eleventh
+    # under Tcl 8.6 as under Tcl 9, and 08 a page rather than a word that
+    # compares as a string.
+    set index [::tclpdf::pdfObj decimal $index]
     if {$index < 0 || $index >= [llength $tclpdfPages]} {
       return -code error -errorcode [list TCLPDF PAGE INDEX $index] \
           "tclpdf: no such page: $index - the document has\
@@ -1086,4 +1105,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::page 1.7
+package provide tclpdf::page 1.8

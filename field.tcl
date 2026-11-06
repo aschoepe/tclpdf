@@ -365,7 +365,7 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::pdfObj 1.0-
+package require tclpdf::pdfObj 1.9-
 package require tclpdf::option 1.0-
 package require tclpdf::color 1.0-
 package require tclpdf::geometry 1.0-
@@ -1308,6 +1308,9 @@ oo::define ::tclpdf::document::document {
     if {$page eq {}} {
       return [my PageIndex {}]
     }
+    # Read in decimal (pdfObj.tcl, [decimal]): -page 010 is the eleventh page
+    # under Tcl 8.6 as under Tcl 9.
+    set page [::tclpdf::pdfObj decimal $page]
     if {![string is integer -strict $page] || $page < 0} {
       return -code error -errorcode [list TCLPDF FIELD PAGE $page] \
           "tclpdf: -page of a form field is a page index counting from zero,\
@@ -1368,6 +1371,9 @@ oo::define ::tclpdf::document::document {
     # NaN and an infinity pass that test and fail no comparison either, so
     # the width check below would wave them through and the write would fail
     # with a raw Tcl sentence about a non-numeric floating-point value.
+    #
+    # Read in decimal first (pdfObj.tcl, [decimal]), and answered as read.
+    set rect [lmap value $rect {::tclpdf::pdfObj decimal $value}]
     foreach value $rect {
       if {![string is double -strict $value]
           || [catch {::tclpdf::pdfObj num $value}]} {
@@ -1842,7 +1848,7 @@ oo::define ::tclpdf::document::document {
     # optional 0: every other caller of [FieldSize] may leave -size out and
     # get whatever this call settled, and this is that call - an empty size
     # here would leave the document with no default at all.
-    my FieldSize [dict get $options size] "field default" 0
+    dict set options size [my FieldSize [dict get $options size] "field default" 0]
     # Both are checked by building the string they will produce - a family
     # that does not resolve or a colour with no /DA spelling has to be
     # refused here, at the call that named it, and not inside a catalogue
@@ -1963,6 +1969,7 @@ oo::define ::tclpdf::document::document {
     if {$value eq {} && $optional} {
       return $value
     }
+    set value [::tclpdf::pdfObj decimal $value]
     if {![::tclpdf::option finite $value] || $value <= 0} {
       return -code error -errorcode [list TCLPDF FIELD SIZE $value] \
           "tclpdf: -size of $what is a finite font size in points above zero,\
@@ -1978,6 +1985,7 @@ oo::define ::tclpdf::document::document {
   # because every option of the button family does (see fieldButton.tcl);
   # this is the refusal of the two types that do not.
   method FieldBorderWidth {value what} {
+    set value [::tclpdf::pdfObj decimal $value]
     if {![::tclpdf::option finite $value] || $value < 0} {
       return -code error -errorcode [list TCLPDF FIELD BORDERWIDTH $value] \
           "tclpdf: -borderWidth of $what is a finite line width of 0 or more\
@@ -2027,4 +2035,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::field 1.3
+package provide tclpdf::field 1.4

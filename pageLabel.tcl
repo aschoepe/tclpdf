@@ -36,7 +36,7 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::pageLabel {
@@ -67,6 +67,10 @@ oo::define ::tclpdf::document::document {
     set options [::tclpdf::option parse {
       from {} style D prefix {} start 1
     } $args "pageLabels"]
+    # Both numbers read in decimal before they are checked, kept and sorted
+    # (pdfObj.tcl, [decimal]): -from 010 is the eleventh page under Tcl 8.6
+    # as under Tcl 9, and sorts after 9.
+    set options [::tclpdf::option decimals $options {from start}]
     set from [dict get $options from]
     if {![string is integer -strict $from] || $from < 0} {
       return -code error -errorcode [list TCLPDF PAGELABEL ARGUMENT from] \
@@ -157,4 +161,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pageLabel 1.3
+package provide tclpdf::pageLabel 1.4

@@ -61,7 +61,7 @@ package require Tcl 8.6.11-
 package require tclpdf::importRead 1.0-
 package require tclpdf::pdfFunction 1.0-
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::document 1.0-
 
 oo::define ::tclpdf::document::document {
@@ -80,6 +80,10 @@ oo::define ::tclpdf::document::document {
 
   method PdfImport {alias path args} {
     set options [::tclpdf::option parse {page 1} $args "pdf import"]
+    # Read in decimal (pdfObj.tcl, [decimal]): -page 010 is the tenth page
+    # under Tcl 8.6 as under Tcl 9. The numbers of the file itself are read
+    # where the file is read.
+    set options [::tclpdf::option decimals $options {page}]
     set page [dict get $options page]
     if {![string is entier -strict $page] || $page < 1} {
       return -code error -errorcode [list TCLPDF IMPORT ARGUMENT page] \
@@ -928,4 +932,4 @@ oo::define ::tclpdf::document::document {
 #   its own and none of them is inventory in the sense asked for. They are
 #   reachable through the same reader the day they are wanted.
 
-package provide tclpdf::import 1.8
+package provide tclpdf::import 1.9

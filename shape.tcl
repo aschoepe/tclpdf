@@ -21,10 +21,19 @@ package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
 package require tclpdf::graphics 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::geometry 1.0-
 
-namespace eval ::tclpdf::shape {}
+namespace eval ::tclpdf::shape {
+  # The options of the drawing commands that are NUMBERS, read in decimal at
+  # the call (pdfObj.tcl, [decimal]; option.tcl, [decimals]) before anything
+  # checks or computes with them: -at {010 20} is ten under Tcl 8.6 as under
+  # Tcl 9. -points and -segments hold their numbers a level down and are
+  # read there, the operator letters of a segment staying the words they
+  # are. Named once for the eight commands below.
+  variable numberOptions {at size from to c1 c2 radius start extent points
+      segments width dash miter opacity}
+}
 
 # Refuse a malformed segment list by name, before anything is written or
 # measured. A namespace proc rather than a private method because textPath is
@@ -83,6 +92,7 @@ oo::define ::tclpdf::document::document {
     set options [::tclpdf::option parse {
       from {} to {} stroke {} width {} dash {} cap {} join {} miter {} opacity {} blend {} overprint {}
     } $args]
+    set options [::tclpdf::option decimals $options $::tclpdf::shape::numberOptions]
     # ONE OPTION PER REFUSAL. The fourth word of a TCLPDF SHAPE ARGUMENT code
     # is the option that is wrong, spelt without its dash - the convention
     # STRUCTURE already states in the manual, and the one this file kept in
@@ -117,6 +127,7 @@ oo::define ::tclpdf::document::document {
       at {} size {} fill {} stroke {} width {} dash {} radius 0
       cap {} join {} miter {} opacity {} blend {} overprint {} rule nonzero
     } $args]
+    set options [::tclpdf::option decimals $options $::tclpdf::shape::numberOptions]
     foreach key {at size} {
       if {[dict get $options $key] eq {}} {
         return -code error -errorcode [list TCLPDF SHAPE ARGUMENT $key] \
@@ -164,6 +175,7 @@ oo::define ::tclpdf::document::document {
       at {} radius {} size {} fill {} stroke {} width {} dash {}
       cap {} join {} miter {} opacity {} blend {} overprint {} rule nonzero
     } $args]
+    set options [::tclpdf::option decimals $options $::tclpdf::shape::numberOptions]
     if {[dict get $options at] eq {}} {
       return -code error -errorcode [list TCLPDF SHAPE ARGUMENT at] \
           "tclpdf: ellipse needs -at {x y}"
@@ -228,6 +240,7 @@ oo::define ::tclpdf::document::document {
       fill {} stroke {} width {} dash {}
       cap {} join {} miter {} opacity {} blend {} overprint {} rule nonzero
     } $args]
+    set options [::tclpdf::option decimals $options $::tclpdf::shape::numberOptions]
     if {[dict get $options at] eq {}} {
       return -code error -errorcode [list TCLPDF SHAPE ARGUMENT at] \
           "tclpdf: arc needs -at {x y}"
@@ -399,6 +412,7 @@ oo::define ::tclpdf::document::document {
       points {} fill {} stroke {} width {} dash {} close 1
       cap {} join {} miter {} opacity {} blend {} overprint {} rule nonzero
     } $args]
+    set options [::tclpdf::option decimals $options $::tclpdf::shape::numberOptions]
     set points [dict get $options points]
     if {[llength $points] < 4} {
       return -code error -errorcode [list TCLPDF SHAPE POINTS count] \
@@ -431,6 +445,7 @@ oo::define ::tclpdf::document::document {
       from {} c1 {} c2 {} to {} fill {} stroke {} width {} dash {}
       cap {} join {} miter {} opacity {} blend {} overprint {} rule nonzero close 0
     } $args]
+    set options [::tclpdf::option decimals $options $::tclpdf::shape::numberOptions]
     foreach key {from c1 c2 to} {
       if {[dict get $options $key] eq {}} {
         return -code error -errorcode [list TCLPDF SHAPE ARGUMENT $key] \
@@ -466,6 +481,7 @@ oo::define ::tclpdf::document::document {
       segments {} fill {} stroke {} width {} dash {} close 0
       cap {} join {} miter {} opacity {} blend {} overprint {} rule nonzero
     } $args]
+    set options [::tclpdf::option decimals $options $::tclpdf::shape::numberOptions]
     set path [my ShapeSegments [dict get $options segments]]
     if {[dict get $options close]} {
       append path "h\n"
@@ -591,6 +607,7 @@ oo::define ::tclpdf::document::document {
   # and is therefore deliberately NOT wrapped in q/Q the way the shapes are.
   method clip {args} {
     set options [::tclpdf::option parse {at {} size {} segments {} rule nonzero} $args]
+    set options [::tclpdf::option decimals $options $::tclpdf::shape::numberOptions]
     set hasRect [expr {[dict get $options at] ne {} || [dict get $options size] ne {}}]
     set hasPath [expr {[dict get $options segments] ne {}}]
     if {$hasRect && $hasPath} {
@@ -712,4 +729,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::shape 1.8
+package provide tclpdf::shape 1.9

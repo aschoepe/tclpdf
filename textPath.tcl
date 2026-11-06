@@ -38,7 +38,7 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::geometry 1.0-
 package require tclpdf::document 1.0-
 package require tclpdf::text 1.0-
@@ -70,6 +70,10 @@ oo::define ::tclpdf::document::document {
     # one line, and -direction is a property of the line.
     set defaults [dict merge $defaults $::tclpdf::text::runOptions]
     set options [::tclpdf::option parse $defaults $args "textPath"]
+    # -offset and the numbers of -segments read in decimal before anything
+    # checks or measures them (pdfObj.tcl, [decimal]); the font state's
+    # numbers are read by [TextCheck].
+    set options [::tclpdf::option decimals $options {segments offset}]
     if {![llength [dict get $options segments]]} {
       return -code error -errorcode [list TCLPDF TEXT PATH segments] \
           "tclpdf: textPath needs -segments"
@@ -425,4 +429,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textPath 1.9
+package provide tclpdf::textPath 1.10

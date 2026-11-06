@@ -29,7 +29,7 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::geometry 1.0-
 package require tclpdf::document 1.0-
 package require tclpdf::text 1.0-
@@ -57,6 +57,10 @@ oo::define ::tclpdf::document::document {
     # whole reason the option has to reach this far.
     set defaults [dict merge $defaults $::tclpdf::text::runOptions]
     set options [::tclpdf::option parse $defaults $args "pageNumbers"]
+    # The numbers of this call read in decimal before they are checked
+    # (pdfObj.tcl, [decimal]): -total 010 is ten pages under Tcl 8.6 as under
+    # Tcl 9. The text options are [text]'s and read there.
+    set options [::tclpdf::option decimals $options {at from total}]
     # [option point] rather than a word count of its own, which is what stood
     # here: it counted the words and let every value through - "-at {a b}",
     # "-at {NaN 10}" and "-at {1e39 10}" were taken by the call and refused
@@ -223,4 +227,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pageNumber 1.7
+package provide tclpdf::pageNumber 1.8

@@ -42,12 +42,13 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::geometry 1.0-
 package require tclpdf::color 1.0-
 # 1.8 for [TableCellContent], the check of a cell of runs or markup; 1.10
-# for a list in a cell, measured with its indent.
-package require tclpdf::tableLayout 1.10-
+# for a list in a cell, measured with its indent; 1.11 for the widths,
+# paddings and sizes of a table read in decimal.
+package require tclpdf::tableLayout 1.11-
 # 1.9 for a cell holding a list, drawn in one call.
 package require tclpdf::tableDraw 1.9-
 package require tclpdf::document 1.0-
@@ -207,6 +208,12 @@ oo::define ::tclpdf::document::document {
       repeatColumns 0 decimal . didParseCell {} willDrawCell {} didDrawCell {}
       didDrawPage {}
     } $arguments "table"]
+    # The numbers of the call read in decimal before anything checks or
+    # computes with them (pdfObj.tcl, [decimal]): -width 0100 is a hundred
+    # under Tcl 8.6 as under Tcl 9. The numbers inside a style, a column and
+    # a cell are read where those are taken apart (tableLayout.tcl).
+    set options [::tclpdf::option decimals $options \
+        {at width minRowHeight bottom top repeatColumns}]
     # THE FIVE LIST OPTIONS ARE LISTS, asked before anything counts them.
     # [llength] on a string that is not one is a Tcl error, and that is what
     # a caller heard: -columns with a single unmatched opening brace answered
@@ -1135,4 +1142,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::table 1.13
+package provide tclpdf::table 1.14

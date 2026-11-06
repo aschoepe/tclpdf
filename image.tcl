@@ -89,7 +89,7 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::filter 1.0-
 package require tclpdf::geometry 1.0-
 package require tclpdf::io 1.0-
@@ -594,6 +594,11 @@ oo::define ::tclpdf::document::document {
       fit {} fitMode {} align left valign top
       alt {} artifact {} inline 0
     } $args "image place"]
+    # The numbers read in decimal before anything checks or computes with
+    # them (pdfObj.tcl, [decimal]): -at {010 20} is ten under Tcl 8.6 as
+    # under Tcl 9, -rotate 090 ninety degrees.
+    set options [::tclpdf::option decimals $options \
+        {at size width height scale rotate opacity dpi fit}]
     set images [my state images]
     if {![dict exists $images $alias]} {
       return -code error -errorcode [list TCLPDF IMAGE ALIAS $alias] \
@@ -1527,6 +1532,10 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options dpi] eq "auto"} {
       dict set options dpi {}
     }
+    # The sizing options read in decimal before they are judged (pdfObj.tcl,
+    # [decimal]) - [image place] has done so already, [image size] comes
+    # straight here.
+    set options [::tclpdf::option decimals $options {size width height scale dpi fit}]
     ::tclpdf::geometry checkFit $options $what
     # The box and the two anchors, checked in the same breath and before
     # anything is read - [fitCheck] in page.tcl, beside the arithmetic that
@@ -2051,4 +2060,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::image 1.15
+package provide tclpdf::image 1.16

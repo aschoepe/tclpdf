@@ -116,7 +116,7 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::geometry 1.0-
 package require tclpdf::document 1.0-
 # For [::tclpdf::text::selectorHint], the one sentence a glyph refusal at a
@@ -344,6 +344,9 @@ oo::define ::tclpdf::document::document {
     set options [::tclpdf::option parse \
         {matrix {0.001 0 0 0.001 0 0} ascent {} bbox {}} $args \
         "font define"]
+    # The numbers read in decimal before they are checked (pdfObj.tcl,
+    # [decimal]).
+    set options [::tclpdf::option decimals $options {matrix ascent bbox}]
     if {[dict exists [my state fonts] $alias]} {
       return -code error -errorcode [list TCLPDF TYPE3 ALIAS $alias] \
           "tclpdf: a font named \"$alias\" already exists"
@@ -462,6 +465,8 @@ oo::define ::tclpdf::document::document {
   method Type3Glyph {level alias text args} {
     set options [::tclpdf::option parse \
         {width {} script {} name {} color own bbox {}} $args "font glyph"]
+    # Read in decimal before they are checked (pdfObj.tcl, [decimal]).
+    set options [::tclpdf::option decimals $options {width bbox}]
     set fonts [my state fonts]
     if {![dict exists $fonts $alias]} {
       return -code error -errorcode [list TCLPDF TYPE3 ALIAS $alias] \
@@ -1199,4 +1204,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::type3 1.4
+package provide tclpdf::type3 1.5

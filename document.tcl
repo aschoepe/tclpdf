@@ -32,12 +32,13 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::pdfObj 1.9-
+package require tclpdf::option 1.4-
 package require tclpdf::filter 1.0-
 package require tclpdf::writer 1.0-
 package require tclpdf::event 1.0-
-package require tclpdf::geometry 1.0-
+# 1.8 for a -format read in decimal by [geometry toPoints].
+package require tclpdf::geometry 1.8-
 
 namespace eval ::tclpdf::document {}
 
@@ -95,6 +96,10 @@ oo::class create ::tclpdf::document::document {
   # the writer took it.
   method configure {args} {
     set options [::tclpdf::option parse $tclpdfOption $args "the document"]
+    # The margins read in decimal before anything checks or stores them
+    # (pdfObj.tcl, [decimal]): -typeArea {020 20} is twenty under Tcl 8.6 as
+    # under Tcl 9. -format reaches [geometry toPoints], which reads its own.
+    set options [::tclpdf::option decimals $options {typeArea}]
     # -unit, -format and -orientation, at the call that gave them. All three
     # used to be stored unread and looked at for the first time by [page
     # add] - measured 2026-08-26, "tclpdf new -unit furlong" was taken, the
@@ -285,7 +290,8 @@ oo::class create ::tclpdf::document::document {
     # wrote /XYZ 28.35 811 -1, and 12.3.2.2 knows a number or null and no
     # negative factor.
     if {[dict get $options zoom] ne {}} {
-      ::tclpdf::option zoom [dict get $options zoom] -zoom "destination"
+      dict set options zoom \
+          [::tclpdf::option zoom [dict get $options zoom] -zoom "destination"]
     }
     return [my Destination $page \
         [dict get $options to] [dict get $options zoom] {}]
@@ -298,6 +304,9 @@ oo::class create ::tclpdf::document::document {
   # internals in the manual, and a direct caller's forward destination is
   # still reported, as "a destination".
   method Destination {page at zoom asker} {
+    # Read in decimal (pdfObj.tcl, [decimal]): page 010 is the eleventh
+    # under Tcl 8.6 as under Tcl 9.
+    set page [::tclpdf::pdfObj decimal $page]
     if {![string is integer -strict $page] || $page < 0} {
       return -code error -errorcode [list TCLPDF DOCUMENT PAGE $page] \
           "tclpdf: no such page: $page - the document has\
@@ -963,4 +972,4 @@ proc ::tclpdf::document::parseDate {value {version {}}} {
       zoneMinute $zoneMinute]
 }
 
-package provide tclpdf::document 1.16
+package provide tclpdf::document 1.17

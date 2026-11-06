@@ -33,7 +33,7 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::geometry 1.0-
 package require tclpdf::document 1.0-
 package require tclpdf::text 1.0-
@@ -58,7 +58,11 @@ oo::define ::tclpdf::document::document {
     # Carried in the same dictionary so that the drawing takes one argument.
     dict set options left $left
     dict set options right $right
-    ::tclpdf::option point [dict get $options at] -at leader
+    # -width read in decimal before it is checked (pdfObj.tcl, [decimal]);
+    # -at comes back read from [option point]. The text options are [text]'s
+    # and read there.
+    set options [::tclpdf::option decimals $options {width gap}]
+    dict set options at [::tclpdf::option point [dict get $options at] -at leader]
     set width [dict get $options width]
     if {$width eq {}} {
       return -code error -errorcode [list TCLPDF LEADER ARGUMENT width] \
@@ -303,4 +307,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::leader 1.5
+package provide tclpdf::leader 1.6

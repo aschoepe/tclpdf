@@ -22,10 +22,11 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::pdfObj 1.0-
+package require tclpdf::pdfObj 1.9-
 package require tclpdf::color 1.0-
-package require tclpdf::option 1.0-
-package require tclpdf::geometry 1.0-
+package require tclpdf::option 1.4-
+# 1.8 for a -matrix read in decimal by [geometry check].
+package require tclpdf::geometry 1.8-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::graphics {}
@@ -187,6 +188,9 @@ oo::define ::tclpdf::document::document {
     set options [::tclpdf::option parse {
       at {} translate {} rotate {} scale {} skew {} matrix {}
     } $args]
+    # The numbers read in decimal before anything checks or composes them
+    # (pdfObj.tcl, [decimal]); -matrix reads its own in [geometry check].
+    set options [::tclpdf::option decimals $options {at translate rotate scale skew}]
     if {[dict get $options matrix] ne {}} {
       # Six finite numbers and not singular - the one check every raw
       # -matrix gets (geometry.tcl), before the cm goes out. "cm" takes
@@ -657,6 +661,8 @@ oo::define ::tclpdf::document::document {
   # page. Writing it from here directly used to place it before the "q" that
   # GraphicsStyle now emits, which is exactly the leak this separation ends.
   method GraphicsOpacity {value {which both}} {
+    # Read in decimal first (pdfObj.tcl, [decimal]).
+    set value [::tclpdf::pdfObj decimal $value]
     # [finite] rather than "string is double": NaN is a double to Tcl and
     # compares false against BOTH bounds, so "< 0 || > 1" let it through and
     # the ExtGState was written with a /ca of NaN - measured 2026-08-26,
@@ -722,6 +728,11 @@ oo::define ::tclpdf::document::document {
   # of them should spell out. "what" names the calling command - "rect",
   # "style" - for the colour space record, see [ColourUsed].
   method GraphicsStyle {options guard what} {
+    # The numbers read in decimal before anything below checks them
+    # (pdfObj.tcl, [decimal]): -width 08 is eight under Tcl 8.6 as under
+    # Tcl 9, and -dash {010 2} ten and two. Overprint's -mode is not among
+    # them: it is a switch of two values and answers for itself.
+    set options [::tclpdf::option decimals $options {width dash miter opacity}]
     # The operators are assembled and every value checked BEFORE the mark is
     # taken and the "q" is written: a refused cap or colour used to leave the
     # structure state believing a mark was open, and the next shape on the
@@ -1000,4 +1011,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::graphics 1.9
+package provide tclpdf::graphics 1.10

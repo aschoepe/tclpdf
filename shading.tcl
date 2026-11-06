@@ -44,9 +44,10 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.4-
 package require tclpdf::color 1.0-
-package require tclpdf::geometry 1.0-
+# 1.8 for a -matrix read in decimal by [geometry check].
+package require tclpdf::geometry 1.8-
 package require tclpdf::pdfFunction 1.0-
 package require tclpdf::document 1.0-
 
@@ -253,8 +254,16 @@ oo::define ::tclpdf::document::document {
   method ShadingOptions {kind arguments what} {
     set options [::tclpdf::option parse [my ShadingDefaults $kind] \
         $arguments $what]
+    # The numbers read in decimal before anything checks or computes with
+    # them (pdfObj.tcl, [decimal]); a key the kind has not got is skipped.
+    # -matrix reads its own in [geometry check], -colors are the colour
+    # module's, and -expression is a program read by pdfFunction.tcl.
+    set options [::tclpdf::option decimals $options {at size stops angle
+        extend from to center radius innerRadius focus domain vertices perRow
+        patches}]
     if {[dict get $options matrix] ne {}} {
-      ::tclpdf::geometry check [dict get $options matrix] $what
+      dict set options matrix \
+          [::tclpdf::geometry check [dict get $options matrix] $what]
     }
     # Points and the size: exactly two numbers each. Not through [coords]
     # here - under a -matrix they are read as they stand - only counted and
@@ -817,4 +826,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::shading 1.9
+package provide tclpdf::shading 1.10
