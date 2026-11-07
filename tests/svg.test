@@ -157,6 +157,117 @@ test svg-1.9 {the root of a parse has no parent} -body {
   }
 } -result 1
 
+# The built-in parser's entity pass, rebuilt on 2026-11-07. It used to turn
+# every reference into a bracketed [format] call and hand the whole value to
+# [subst], which ran ANY bracket the document carried - an attribute of
+# "&amp;[set ::pwned yes]" set the variable - and [format %c] read the digits
+# of "&#065;" as octal under Tcl 8.6. These tests switch tdom off, because tdom
+# never had either fault and would hide the fallback; svg-1.14 then checks
+# that both parsers agree where tdom accepts the document at all.
+
+test svg-1.10 {a bracket in an attribute or text is data, not a command} -setup {
+  set savedTdom $::tclpdf::xml::haveTdom
+  set ::tclpdf::xml::haveTdom 0
+  unset -nocomplain ::pwned
+} -body {
+  set root [::tclpdf::xml parse {<a t="&amp;[set ::pwned yes]">&amp;[set ::pwned yes]</a>}]
+  set value [::tclpdf::xml attribute $root t]
+  set content [::tclpdf::xml text $root]
+  ::tclpdf::xml release $root
+  list [::tclpdf::xml parser] $value \
+      [expr {$value eq {&[set ::pwned yes]}}] \
+      [expr {$content eq {&[set ::pwned yes]}}] \
+      [info exists ::pwned]
+} -cleanup {
+  set ::tclpdf::xml::haveTdom $savedTdom
+  unset -nocomplain ::pwned savedTdom root value content
+} -result {tclpdf {&[set ::pwned yes]} 1 1 0}
+
+# With and without a reference beside them: without one the value never
+# reaches the entity pass at all, so only the second document tests it.
+test svg-1.11 {brackets, backslashes and dollars stay as written} -setup {
+  set savedTdom $::tclpdf::xml::haveTdom
+  set ::tclpdf::xml::haveTdom 0
+} -body {
+  set answer {}
+  foreach {source attribute content} {
+    {<a t="a[b]\c$d">x[y]\n$z</a>}
+    {a[b]\c$d} {x[y]\n$z}
+    {<a t="&lt;a[b]\c$d">&gt;x[y]\n$z</a>}
+    {<a[b]\c$d} {>x[y]\n$z}
+  } {
+    set root [::tclpdf::xml parse $source]
+    lappend answer \
+        [expr {[::tclpdf::xml attribute $root t] eq $attribute}] \
+        [expr {[::tclpdf::xml text $root] eq $content}]
+    ::tclpdf::xml release $root
+  }
+  set answer
+} -cleanup {
+  set ::tclpdf::xml::haveTdom $savedTdom
+  unset -nocomplain savedTdom answer source attribute content root
+} -result {1 1 1 1}
+
+test svg-1.12 {numeric references are decimal, leading zeros or not} -setup {
+  set savedTdom $::tclpdf::xml::haveTdom
+  set ::tclpdf::xml::haveTdom 0
+} -body {
+  set root [::tclpdf::xml parse \
+      {<a d="&#065;" n="&#010;" h="&#x0041;" q="&#39;" w="&#34;">&#065;&#010;&#x0041;</a>}]
+  set answer [list \
+      [expr {[::tclpdf::xml attribute $root d] eq "A"}] \
+      [expr {[::tclpdf::xml attribute $root n] eq "\n"}] \
+      [expr {[::tclpdf::xml attribute $root h] eq "A"}] \
+      [expr {[::tclpdf::xml attribute $root q] eq "'"}] \
+      [expr {[::tclpdf::xml attribute $root w] eq "\""}] \
+      [expr {[::tclpdf::xml text $root] eq "A\nA"}]]
+  ::tclpdf::xml release $root
+  set answer
+} -cleanup {
+  set ::tclpdf::xml::haveTdom $savedTdom
+  unset -nocomplain savedTdom root answer
+} -result {1 1 1 1 1 1}
+
+# Only the built-in parser is asked: tdom refuses the second and third value
+# outright ("undefined entity", "not well-formed"), which is the stricter and
+# equally right answer - the fallback leaves them standing instead, as its
+# header comment says.
+test svg-1.13 {one pass only, and what is not a reference stays} -setup {
+  set savedTdom $::tclpdf::xml::haveTdom
+  set ::tclpdf::xml::haveTdom 0
+} -body {
+  set root [::tclpdf::xml parse \
+      {<a s="&amp;lt;" u="&unknown;" b="x & y">&amp;lt; &unknown; &</a>}]
+  set answer [list \
+      [expr {[::tclpdf::xml attribute $root s] eq "&lt;"}] \
+      [expr {[::tclpdf::xml attribute $root u] eq "&unknown;"}] \
+      [expr {[::tclpdf::xml attribute $root b] eq "x & y"}] \
+      [expr {[::tclpdf::xml text $root] eq "&lt; &unknown; &"}]]
+  ::tclpdf::xml release $root
+  set answer
+} -cleanup {
+  set ::tclpdf::xml::haveTdom $savedTdom
+  unset -nocomplain savedTdom root answer
+} -result {1 1 1 1}
+
+test svg-1.14 {both parsers read references and brackets alike} -setup {
+  unset -nocomplain ::pwned
+} -body {
+  svgBothParsers {
+    set root [::tclpdf::xml parse \
+        {<a d="&#065;" n="&#010;" h="&#x0041;" q="&#39;" w="&#34;" s="&amp;lt;" t="&amp;[set ::pwned yes]">&#065;&#010;&#x0041;&amp;lt;x[y]\n$z</a>}]
+    set answer {}
+    foreach name {d n h q w s t} {
+      lappend answer [::tclpdf::xml attribute $root $name]
+    }
+    lappend answer [::tclpdf::xml text $root] [info exists ::pwned]
+    ::tclpdf::xml release $root
+    set answer
+  }
+} -cleanup {
+  unset -nocomplain ::pwned root answer name
+} -result [list [list A \n A ' \" {&lt;} {&[set ::pwned yes]} "A\nA&lt;x\[y\]\\n\$z" 0]]
+
 test svg-2.1 {the four basic commands} -body {
   ::tclpdf::svgPath operators {M10 20 L30 40 Z} $plain
 } -result "10 20 m\n30 40 l\nh\n"

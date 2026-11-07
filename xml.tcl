@@ -473,12 +473,30 @@ proc ::tclpdf::xml::Unescape {text} {
   if {[string first & $text] < 0} {
     return $text
   }
-  set text [string map {&lt; < &gt; > &quot; \" &apos; ' &#39; ' &#34; \"} $text]
-  set text [regsub -all {&#x([0-9A-Fa-f]+);} $text {[format %c 0x\1]}]
-  set text [regsub -all {&#([0-9]+);} $text {[format %c \1]}]
-  set text [subst -novariables -nobackslashes $text]
-  # Ampersand last, so that an escaped ampersand does not restart the others.
-  return [string map {&amp; &} $text]
+  # One pass over the references, each replaced by its character; the text
+  # between them is copied, never evaluated. No subst here: it would run any
+  # bracketed command the document carries. The digits go through scan, so
+  # &#065; is 65 under Tcl 8.6 as well.
+  set result {}
+  set from 0
+  foreach {all name hex dec} [regexp -all -inline -indices \
+      {&(?:(lt|gt|quot|apos|amp)|#x([0-9A-Fa-f]+)|#([0-9]+));} $text] {
+    lassign $all start end
+    append result [string range $text $from [expr {$start - 1}]]
+    if {[lindex $name 0] >= 0} {
+      append result [dict get {lt < gt > quot \" apos ' amp &} \
+          [string range $text {*}$name]]
+    } elseif {[lindex $hex 0] >= 0} {
+      scan [string range $text {*}$hex] %x code
+      append result [format %c $code]
+    } else {
+      scan [string range $text {*}$dec] %d code
+      append result [format %c $code]
+    }
+    set from [expr {$end + 1}]
+  }
+  append result [string range $text $from end]
+  return $result
 }
 
 package provide tclpdf::xml 1.3
