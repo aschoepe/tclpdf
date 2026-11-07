@@ -58,6 +58,7 @@
 
 package require Tcl 8.6.11-
 package require tclpdf::io 1.0-
+package require tclpdf::pdfObj 1.9-
 
 namespace eval ::tclpdf::type1 {
   namespace export {[a-z]*}
@@ -237,8 +238,14 @@ proc ::tclpdf::type1::glyphs {font} {
       break
     }
     dict set result [string range $plain {*}$name] 1
-    # Past the bytes and past the closing token (ND, |- or a synonym).
-    set at [expr {[lindex $whole 1] + 1 + [string range $plain {*}$length]}]
+    # Past the bytes and past the closing token (ND, |- or a synonym). The
+    # count is a PostScript integer and decimal: "/A 0123 RD" is 123 bytes,
+    # which Tcl 8.6 read as octal 83 and lost every glyph after it.
+    set count [string range $plain {*}$length]
+    if {[regexp {^0[0-9]} $count]} {
+      set count [::tclpdf::pdfObj::decimal $count]
+    }
+    set at [expr {[lindex $whole 1] + 1 + $count}]
     if {![regexp -start $at -indices {\s*\S+} $plain token]} {
       break
     }
@@ -424,9 +431,12 @@ proc ::tclpdf::type1::Header {clear} {
   # brace inside a braced word is counted by Tcl whether it is escaped or not,
   # and the procedure body would end in the middle of the regular expression.
   if {[regexp {/FontBBox\s*\{\s*([-0-9. ]+)} $clear -> value]} {
-    dict set header bbox [lmap number $value {expr {int($number)}}]
+    dict set header bbox [lmap number $value {Int $number}]
   }
   if {[regexp {/ItalicAngle\s*(-?[0-9.]+)} $clear -> value]} {
+    if {[regexp {^[-+]?0[0-9]} $value]} {
+      set value [::tclpdf::pdfObj::decimal $value]
+    }
     dict set header italicAngle $value
   }
   if {[regexp {/version\s*\(([^)]*)\)} $clear -> value]} {
@@ -441,6 +451,30 @@ proc ::tclpdf::type1::Header {clear} {
   return $header
 }
 
+# A whole number of the header or of the metrics, READ IN DECIMAL: an AFM and
+# a Type 1 program write decimal numbers, and Tcl 8.6 reads "0610" as octal
+# 392 and refuses "-0299" as no number at all. Through [pdfObj decimal],
+# which is the package's one reader for that, then cut to an integer as
+# before.
+#
+# THE TEST IN FRONT IS A [regexp] AND NOT THE [string match] the other
+# callers of [pdfObj decimal] write, and that is measured, not taste. Every
+# number here is a capture of a [regexp] and carries Tcl's unicode string
+# representation; [string match] against such a value converts its PATTERN
+# to that representation as well - and the pattern {0[0-9]*} is one literal
+# shared by every procedure of the interpreter that spells it, [pdfObj num]
+# among them. From then on every [string match] with it takes the slower
+# unicode road: measured 2026-11-07, example 02.07 ran 2 to 3 % slower as a
+# whole under both interpreters - in the text and the table set after the
+# Type 1 faces were embedded, not in the embedding - and with this test in
+# front it runs as fast as it did before the reading.
+proc ::tclpdf::type1::Int {value} {
+  if {[regexp {^[-+]?0[0-9]} $value]} {
+    set value [::tclpdf::pdfObj::decimal $value]
+  }
+  return [expr {int($value)}]
+}
+
 # The metrics beside the program. An AFM is a plain text file and only two of
 # its sections matter here: the per-character metrics and the header values a
 # font descriptor needs.
@@ -453,6 +487,11 @@ proc ::tclpdf::type1::TopWanted {} {
   return {H d b}
 }
 
+# THE CHARACTER CODE "C 065" STAYS A KEY as the file wrote it: [codes] maps
+# it to the glyph name and nothing in this package counts with it - the
+# positions a face is set at come from WinAnsiEncoding by glyph name, see
+# [names]. Its one comparison - 0 or more, where -1 means "not encoded" -
+# answers alike under Tcl 8.6 and Tcl 9 with a leading zero or without.
 proc ::tclpdf::type1::metrics {path} {
   set text [::tclpdf::io read $path]
   # "tops" is the upper edge of the few glyphs a font descriptor is measured
@@ -497,6 +536,11 @@ proc ::tclpdf::type1::metrics {path} {
         }
       }
       if {$name ne {} && $width ne {}} {
+        # Inline rather than through [Int]: this runs once per glyph, and a
+        # face has several hundred. A [regexp] for the reason given there.
+        if {[regexp {^[-+]?0[0-9]} $width]} {
+          set width [::tclpdf::pdfObj::decimal $width]
+        }
         dict set metrics widths $name [expr {int($width)}]
         if {$code >= 0} {
           dict set metrics codes $code $name
@@ -505,7 +549,7 @@ proc ::tclpdf::type1::metrics {path} {
         # a box per glyph over a face of several hundred is a dictionary
         # nobody reads.
         if {$top ne {} && $name in [TopWanted]} {
-          dict set metrics tops $name [expr {int($top)}]
+          dict set metrics tops $name [Int $top]
         }
       }
       continue
@@ -515,21 +559,22 @@ proc ::tclpdf::type1::metrics {path} {
     } elseif {[regexp {^FamilyName\s+(.+)} $line -> value]} {
       dict set metrics family [string trim $value]
     } elseif {[regexp {^FontBBox\s+(.+)} $line -> value]} {
-      dict set metrics bbox [lmap number [string trim $value] {
-        expr {int($number)}
-      }]
+      dict set metrics bbox [lmap number [string trim $value] {Int $number}]
     } elseif {[regexp {^ItalicAngle\s+(-?[0-9.]+)} $line -> value]} {
+      if {[regexp {^[-+]?0[0-9]} $value]} {
+        set value [::tclpdf::pdfObj::decimal $value]
+      }
       dict set metrics italicAngle $value
     } elseif {[regexp {^Ascender\s+(-?[0-9.]+)} $line -> value]} {
-      dict set metrics ascender [expr {int($value)}]
+      dict set metrics ascender [Int $value]
     } elseif {[regexp {^Descender\s+(-?[0-9.]+)} $line -> value]} {
-      dict set metrics descender [expr {int($value)}]
+      dict set metrics descender [Int $value]
     } elseif {[regexp {^CapHeight\s+(-?[0-9.]+)} $line -> value]} {
-      dict set metrics capHeight [expr {int($value)}]
+      dict set metrics capHeight [Int $value]
     } elseif {[regexp {^XHeight\s+(-?[0-9.]+)} $line -> value]} {
-      dict set metrics xHeight [expr {int($value)}]
+      dict set metrics xHeight [Int $value]
     } elseif {[regexp {^StdVW\s+(-?[0-9.]+)} $line -> value]} {
-      dict set metrics stemV [expr {int($value)}]
+      dict set metrics stemV [Int $value]
     } elseif {[regexp {^IsFixedPitch\s+(\S+)} $line -> value]} {
       dict set metrics fixedPitch [expr {$value eq "true"}]
     }
@@ -542,4 +587,4 @@ proc ::tclpdf::type1::metrics {path} {
   return $metrics
 }
 
-package provide tclpdf::type1 1.3
+package provide tclpdf::type1 1.4

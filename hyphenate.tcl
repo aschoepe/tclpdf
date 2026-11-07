@@ -90,6 +90,7 @@
 #
 
 package require Tcl 8.6.11-
+package require tclpdf::pdfObj 1.9-
 package require tclpdf::option 1.4-
 
 namespace eval ::tclpdf::hyphenate {
@@ -292,7 +293,7 @@ proc ::tclpdf::hyphenate::load {tag path args} {
       $args "hyphenate load"]
   # The three minima read in decimal before they are checked and kept
   # (pdfObj.tcl, [decimal]): -left 010 is ten letters under Tcl 8.6 as under
-  # Tcl 9. The directives of the file itself are its own matter.
+  # Tcl 9. The directives of the file are read the same way, in [Parse].
   set options [::tclpdf::option decimals $options {left right min}]
   Tag $tag
   foreach name {left right min} {
@@ -519,6 +520,9 @@ proc ::tclpdf::hyphenate::Parse {channel start} {
   set nohyphen {}
   set compoundFrom {}
   set patternsFrom $start
+  # The four minima are read in decimal where they are read ([pdfObj
+  # decimal]), as -left and -right are: "LEFTHYPHENMIN 010" is ten letters
+  # under Tcl 8.6 as under Tcl 9, where 8.6 counted eight and refused "08".
   while {[gets $channel line] >= 0} {
     set line [string trim $line]
     # "%" is the TeX comment character and "#" the one the German file uses.
@@ -541,16 +545,16 @@ proc ::tclpdf::hyphenate::Parse {channel start} {
         set patternsFrom [tell $channel]
       }
       {LEFTHYPHENMIN *} {
-        set left [lindex $line 1]
+        set left [::tclpdf::pdfObj::decimal [lindex $line 1]]
       }
       {RIGHTHYPHENMIN *} {
-        set right [lindex $line 1]
+        set right [::tclpdf::pdfObj::decimal [lindex $line 1]]
       }
       {COMPOUNDLEFTHYPHENMIN *} {
-        set compoundLeft [lindex $line 1]
+        set compoundLeft [::tclpdf::pdfObj::decimal [lindex $line 1]]
       }
       {COMPOUNDRIGHTHYPHENMIN *} {
-        set compoundRight [lindex $line 1]
+        set compoundRight [::tclpdf::pdfObj::decimal [lindex $line 1]]
       }
       {NOHYPHEN *} {
         # A comma separated list of characters no break may touch. Read

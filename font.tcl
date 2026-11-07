@@ -34,7 +34,7 @@ package require TclOO
 package require tclpdf::pdfObj 1.9-
 package require tclpdf::option 1.4-
 package require tclpdf::filter 1.0-
-package require tclpdf::sfnt 1.0-
+package require tclpdf::sfnt 1.13-
 package require tclpdf::subset 1.0-
 package require tclpdf::document 1.0-
 
@@ -830,7 +830,7 @@ oo::define ::tclpdf::document::document {
   # names are read (type1 glyphs) and a position is mapped only where both
   # agree; a character the program lacks is refused, as it is for TrueType.
   method FontEmbedType1 {alias path bytes metricsPath} {
-    package require tclpdf::type1 1.0-
+    package require tclpdf::type1 1.4-
     set program [::tclpdf::type1 parse $bytes]
     if {$metricsPath eq {}} {
       if {$path eq {}} {
@@ -915,7 +915,7 @@ oo::define ::tclpdf::document::document {
   # 1000 and FontAwesome is on 1792. Scaling at the point where the file is
   # read means nothing downstream has to know.
   method FontEmbedCff {alias path source bytes} {
-    package require tclpdf::type1 1.0-
+    package require tclpdf::type1 1.4-
     set program [::tclpdf::sfnt cffFont $bytes]
     # The same refusal the .otf road makes, for the same reason: a CID-keyed
     # program addresses its glyphs by CID through its own charset, and this

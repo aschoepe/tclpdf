@@ -32,14 +32,75 @@
 #
 # This is a private sub-module behind the [svg] facade.
 #
+# It is also where an SVG NUMBER is read, for every module of the drawing:
+# [numbers] for a list of them - viewBox, points, transform, a dash array -
+# and [length] for one value with its unit. The grammar is the <number> of
+# SVG 1.1, 4.2 and of the path data in F.6, which are the same production,
+# and it stands once, in the namespace below - it stood four times before,
+# each copy in a module of its own, and a fifth and a sixth pattern had grown
+# beside them for transform="" and stroke-dasharray.
+#
 
 package require Tcl 8.6.11-
-package require tclpdf::pdfObj 1.0-
+package require tclpdf::pdfObj 1.9-
 package require tclpdf::geometry 1.4-
 
 namespace eval ::tclpdf::svgPath {
   namespace export {[a-z]*}
   namespace ensemble create
+
+  # An SVG number: an optional sign, digits with an optional fraction or a
+  # fraction alone, an optional exponent that counts only with a digit
+  # behind it. The other two patterns are made from it, so the three cannot
+  # come to disagree.
+  variable numberPattern {[-+]?(?:[0-9]*\.[0-9]+|[0-9]+\.?)(?:[eE][-+]?[0-9]+)?}
+  variable tokenPattern "\[A-Za-z\]|$numberPattern"
+  variable lengthPattern "^\\s*($numberPattern)\\s*(\[a-zA-Z%\]*)\\s*\$"
+}
+
+# Every number in a piece of text, in order and READ IN DECIMAL.
+#
+# Tcl 8.6 reads an integer with a leading zero as octal - "010" is eight to
+# [expr] and "08" is no number at all - and a drawing is not written in
+# octal: SVG 1.1, 4.2 makes a <number> a decimal one. So "010" comes back as
+# "10" and "08" as "8", under Tcl 8.6 as under Tcl 9, through [pdfObj
+# decimal], which is the package's one reader for that. Nothing else is
+# changed: "0.5", "1e3" and "-.5" come back as the file wrote them.
+#
+# The common case - no number of the text begins with a zero followed by a
+# digit - is two [lsearch -glob] over the list and nothing else.
+#
+# NOT [string match] on each value, and that is measured: a capture of
+# [regexp] carries Tcl's unicode representation, and [string match] against
+# it converts the PATTERN as well - a literal that every procedure spelling
+# {0[0-9]*} shares, [pdfObj num] among them, which then takes the slower
+# unicode road for the rest of the process (2 to 3 % on example 02.07,
+# measured 2026-11-07 - see [type1 Int]). [lsearch -glob] and [regexp]
+# leave the pattern as it is.
+proc ::tclpdf::svgPath::numbers {text} {
+  variable numberPattern
+  set found [regexp -all -inline -- $numberPattern $text]
+  if {[lsearch -glob $found {0[0-9]*}] < 0
+      && [lsearch -glob $found {[-+]0[0-9]*}] < 0} {
+    return $found
+  }
+  return [lmap value $found {::tclpdf::pdfObj::decimal $value}]
+}
+
+# One value with an optional unit (SVG 1.1, 4.2), as {number unit}, the
+# number read in decimal as in [numbers]; an empty list where the text is no
+# such value. White space around both is allowed, anything else is not; the
+# exponent counts only with a digit behind it, so "2em" is 2 in em. Which
+# units mean something is the caller's business.
+proc ::tclpdf::svgPath::length {text} {
+  variable lengthPattern
+  if {![regexp -- $lengthPattern $text -> value unit]} {
+    return {}
+  }
+  if {[regexp {^[-+]?0[0-9]} $value]} {
+    set value [::tclpdf::pdfObj::decimal $value]
+  }
+  return [list $value $unit]
 }
 
 # Turn path data into PDF operators. The coordinate transform is a command
@@ -344,12 +405,18 @@ proc ::tclpdf::svgPath::Angle {ux uy vx vy} {
 # seven, and the whole drawing was lost over a path a browser draws
 # (measured 2026-08-27). The queue is what makes it possible to hand the
 # remainder of a token back to the scanner.
+#
+# A number is read in decimal AFTER that split, as [numbers] reads it, and
+# not before: "0160" in the place of a flag is the flag 0 and the number
+# 160, and read first it would have been the number 160 and the flag 1.
 proc ::tclpdf::svgPath::Tokenize {data} {
+  variable tokenPattern
   set result {}
   set command {}
   set numbers {}
-  set queue [regexp -all -inline \
-      {[A-Za-z]|[-+]?(?:[0-9]*\.[0-9]+|[0-9]+\.?)(?:[eE][-+]?[0-9]+)?} $data]
+  set queue [regexp -all -inline -- $tokenPattern $data]
+  set zeros [expr {[lsearch -glob $queue {0[0-9]*}] >= 0
+      || [lsearch -glob $queue {[-+]0[0-9]*}] >= 0}]
   while {[llength $queue]} {
     set token [lindex $queue 0]
     set queue [lrange $queue 1 end]
@@ -364,8 +431,13 @@ proc ::tclpdf::svgPath::Tokenize {data} {
     if {[string toupper $command] eq "A" && [string length $token] > 1 &&
         [expr {[llength $numbers] % 7}] in {3 4} &&
         [string index $token 0] in {0 1}} {
+      # What is left of "10160" is "0160", which no search above has seen.
+      set zeros 1
       set queue [linsert $queue 0 [string range $token 1 end]]
       set token [string index $token 0]
+    }
+    if {$zeros && [regexp {^[-+]?0[0-9]} $token]} {
+      set token [::tclpdf::pdfObj::decimal $token]
     }
     lappend numbers $token
   }
@@ -388,4 +460,4 @@ proc ::tclpdf::svgPath::Point {transform x y} {
   return "[::tclpdf::pdfObj num $px] [::tclpdf::pdfObj num $py]"
 }
 
-package provide tclpdf::svgPath 1.4
+package provide tclpdf::svgPath 1.5

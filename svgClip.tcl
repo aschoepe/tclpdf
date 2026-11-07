@@ -48,7 +48,7 @@ package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
 package require tclpdf::geometry 1.0-
-package require tclpdf::xml 1.0-
+package require tclpdf::xml 1.3-
 package require tclpdf::svgPath 1.0-
 package require tclpdf::document 1.0-
 
@@ -442,4 +442,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::svgClip 1.1
+package provide tclpdf::svgClip 1.2

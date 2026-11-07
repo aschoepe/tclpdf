@@ -1,0 +1,609 @@
+# fileDecimal.test --
+#
+# A number a FILE carries with a leading zero is read in decimal, under
+# Tcl 8.6 as under Tcl 9: in an SVG drawing width="020" is twenty units and
+# "M010 010" a move to ten and ten, in an AFM "WX 0610" a width of 610, in a
+# Type 1 program "/A 0123 RD" a charstring of 123 bytes, in a CFF real the
+# nibbles 0 1 2 the number twelve, and in a libhyphen file "LEFTHYPHENMIN
+# 010" ten letters. Every format here defines its numbers as decimal ones
+# (SVG 1.1, 4.2; the AFM and Type 1 specifications; TN 5176, Table 5).
+#
+# Tcl 8.6 reads an integer with a leading zero as octal wherever it meets
+# [expr], and "08" as no number at all; Tcl 9 reads both in decimal.
+# Measured 2026-11-07 under 8.6.18 before the reading was added: width="08"
+# drew nothing, "translate(08 08)" and "M 08 08 L 09 09 l-08,0" cost the
+# whole drawing under ARITH DOMAIN, rgb(0128,0,0) was an unknown colour,
+# font-weight="0700" set the light cut, offset="010%" a stop at 0.08, an AFM
+# with zeros was refused with TCL VALUE NUMBER, a Type 1 program with zeros
+# in its charstring counts lost every glyph after the first, and the CFF
+# real "012" read 10. Under Tcl 9 a drawing with zeros already measured
+# right but WROTE them: "010 0 10 5 re", "010 010 m".
+#
+# Each case is a pair - the file with the zeros against the same file
+# without them - and asks for the same answer or, for a drawing or a
+# document, the same bytes (uncompressed, fixed date and identifier).
+#
+# One file for the four formats rather than a section in each of svg.test,
+# afm.test, type1.test, sfnt.test and hyphenate.test: the topic is the same
+# one in all of them - a number read out of a file - the pair helper is
+# shared, and so is the counter-check at the end, which concerns the reading
+# and not any one format. Numbers a CALLER writes are in decimal.test,
+# numbers a foreign PDF carries in importDecimal.test.
+#
+# Not here, because it is TEXT made of digits and stays as written: an SVG
+# id or href ("#0012"), a font-family ("007"), the character code of an AFM
+# ("C 065" is the key 065 - see [type1 metrics]).
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::svgPath
+package require tclpdf::type1
+package require tclpdf::sfnt
+package require tclpdf::hyphenate
+source [file join [file dirname [info script]] helper.tcl]
+
+namespace eval ::fileDecimalTest {
+  variable root [file dirname [file dirname [file normalize [info script]]]]
+  variable urw [file join $root examples assets fonts urw-core35-fonts]
+  variable count 0
+}
+
+# A document's bytes and whether two scripts write the same file: helper.tcl,
+# shared with decimal.test. [svgPair] draws each of two pieces of markup at
+# the origin of a fresh page.
+interp alias {} ::fileDecimalTest::same {} ::tclpdfTest::sameBytes
+proc ::fileDecimalTest::svgPair {leading plain} {
+  return [::tclpdfTest::sameBytes "\$doc svg -data [list $leading] -at {0 0}" \
+      "\$doc svg -data [list $plain] -at {0 0}"]
+}
+
+# A file in the scratch directory with TEXT as its contents.
+proc ::fileDecimalTest::writeFile {name text} {
+  set path [::tclpdfTest::scratch $name]
+  set channel [open $path wb]
+  puts -nonewline $channel $text
+  close $channel
+  return $path
+}
+
+#
+# --- the reader of an SVG number ------------------------------------------
+#
+
+test fileDecimal-1.1 {svgPath numbers reads every number in decimal} -body {
+  ::tclpdf::svgPath numbers {0 0 010 08 -08 +012.5 1e3 .5 0.5 00.5 -0.25}
+} -result {0 0 10 8 -8 +12.5 1e3 .5 0.5 0.5 -0.25}
+
+test fileDecimal-1.2 {and hands a list without zeros back as it found it} -body {
+  ::tclpdf::svgPath numbers {10,20 -5.5e2 .5.5 1-2}
+} -result {10 20 -5.5e2 .5 .5 1 -2}
+
+test fileDecimal-1.3 {svgPath length: the number in decimal, the unit beside it} -body {
+  list [::tclpdf::svgPath length " 010px "] [::tclpdf::svgPath length 08] \
+      [::tclpdf::svgPath length 0150%] [::tclpdf::svgPath length 02em] \
+      [::tclpdf::svgPath length 10] [::tclpdf::svgPath length abc]
+} -result {{10 px} {8 {}} {150 %} {2 em} {10 {}} {}}
+
+test fileDecimal-1.4 {the flags of an arc are split off before the number is read} -body {
+  # "0160" where a flag stands is the flag 0 and the number 160; "10160" is
+  # the flag 1, the flag 0 and 160 - read first, the zeros would have made
+  # the flags out of other digits.
+  ::tclpdf::svgPath::Tokenize "M1 1 a30,30 0 0160,0 a030,030 0 10160,1"
+} -result {M {1 1} a {30 30 0 0 1 60 0} a {30 30 0 1 0 160 1}}
+
+test fileDecimal-1.5 {a zero only in what is left of a flag token is read too} -body {
+  # "1012" where the sweep flag stands is the flag 1 and the number "012":
+  # no token of the path has a leading zero before the split, so the
+  # remainder must switch the reading on itself. The same bytes as "112".
+  ::fileDecimalTest::svgPair \
+      {<svg width="100" height="100"><path d="M10 50 a30,30 0 0 1012,5" stroke="red" fill="none"/></svg>} \
+      {<svg width="100" height="100"><path d="M10 50 a30,30 0 0 112,5" stroke="red" fill="none"/></svg>}
+} -result same
+
+#
+# --- an SVG drawing, as a whole file ---------------------------------------
+#
+
+set W {<svg width="100" height="100">}
+
+test fileDecimal-2.1 {width and height of the root} -body {
+  ::fileDecimalTest::svgPair \
+      {<svg width="020" height="020"><rect width="20" height="20" fill="red"/></svg>} \
+      {<svg width="20" height="20"><rect width="20" height="20" fill="red"/></svg>}
+} -result same
+
+test fileDecimal-2.2 {width="08" draws, where Tcl 8.6 drew nothing} -body {
+  ::fileDecimalTest::svgPair \
+      {<svg width="08" height="08"><rect width="8" height="8" fill="red"/></svg>} \
+      {<svg width="8" height="8"><rect width="8" height="8" fill="red"/></svg>}
+} -result same
+
+test fileDecimal-2.3 {viewBox} -body {
+  list [::fileDecimalTest::svgPair \
+      {<svg width="20" height="20" viewBox="0 0 010 010"><rect width="10" height="10" fill="red"/></svg>} \
+      {<svg width="20" height="20" viewBox="0 0 10 10"><rect width="10" height="10" fill="red"/></svg>}] \
+      [::fileDecimalTest::svgPair \
+      {<svg width="20" height="20" viewBox="0 0 08 08"><rect width="8" height="8" fill="red"/></svg>} \
+      {<svg width="20" height="20" viewBox="0 0 8 8"><rect width="8" height="8" fill="red"/></svg>}]
+} -result {same same}
+
+test fileDecimal-2.4 {a rectangle writes its numbers without the zeros} -body {
+  list [::fileDecimalTest::svgPair \
+      "$W<rect x=\"010\" y=\"0012.5\" width=\"010\" height=\"05\" rx=\"02\" fill=\"red\"/></svg>" \
+      "$W<rect x=\"10\" y=\"12.5\" width=\"10\" height=\"5\" rx=\"2\" fill=\"red\"/></svg>"] \
+      [::fileDecimalTest::svgPair \
+      "$W<rect x=\"08\" width=\"5\" height=\"5\" fill=\"red\"/></svg>" \
+      "$W<rect x=\"8\" width=\"5\" height=\"5\" fill=\"red\"/></svg>"]
+} -result {same same}
+
+test fileDecimal-2.5 {transform: translate, scale, rotate about a point, skew, matrix} -body {
+  lmap {leading plain} {
+    {translate(010 010)} {translate(10 10)}
+    {translate(08,-08)} {translate(8,-8)}
+    {scale(02 03)} {scale(2 3)}
+    {rotate(045 010 010)} {rotate(45 10 10)}
+    {skewX(010) skewY(020)} {skewX(10) skewY(20)}
+    {matrix(01 0 0 01 010 020)} {matrix(1 0 0 1 10 20)}
+  } {
+    ::fileDecimalTest::svgPair \
+        "$W<g transform=\"$leading\"><rect width=\"5\" height=\"5\" fill=\"red\"/></g></svg>" \
+        "$W<g transform=\"$plain\"><rect width=\"5\" height=\"5\" fill=\"red\"/></g></svg>"
+  }
+} -result {same same same same same same}
+
+test fileDecimal-2.6 {path data: spaced, glued, 08, negative, curves, arc radii} -body {
+  lmap {leading plain} {
+    {M 010 010 L 020 020 H 030 V 040} {M 10 10 L 20 20 H 30 V 40}
+    {M010 010L020-020} {M10 10L20-20}
+    {M 08 08 L 09 09 l-08,0} {M 8 8 L 9 9 l-8,0}
+    {M-010 -010 l-0012.5 -08} {M-10 -10 l-12.5 -8}
+    {M0 0 C 010 020 030 040 050 060 Q 070 080 090 010} {M0 0 C 10 20 30 40 50 60 Q 70 80 90 10}
+    {M10 50 a030,030 0 0 1 060,0} {M10 50 a30,30 0 0 1 60,0}
+    {M10 50 a30,30 0 0160,0} {M10 50 a30,30 0 0 1 60,0}
+  } {
+    ::fileDecimalTest::svgPair \
+        "$W<path d=\"$leading\" stroke=\"red\" fill=\"none\"/></svg>" \
+        "$W<path d=\"$plain\" stroke=\"red\" fill=\"none\"/></svg>"
+  }
+} -result {same same same same same same same}
+
+test fileDecimal-2.7 {points, line, circle, ellipse} -body {
+  lmap {leading plain} {
+    {<polyline points="010,010 020,020" stroke="red" fill="none"/>}
+    {<polyline points="10,10 20,20" stroke="red" fill="none"/>}
+    {<polygon points="08,08 09,09 010,08" fill="red"/>}
+    {<polygon points="8,8 9,9 10,8" fill="red"/>}
+    {<line x1="08" y1="010" x2="050" y2="010" stroke="red"/>}
+    {<line x1="8" y1="10" x2="50" y2="10" stroke="red"/>}
+    {<circle cx="010" cy="010" r="010" fill="red"/>}
+    {<circle cx="10" cy="10" r="10" fill="red"/>}
+    {<ellipse cx="050" cy="050" rx="010" ry="020" fill="red"/>}
+    {<ellipse cx="50" cy="50" rx="10" ry="20" fill="red"/>}
+  } {
+    ::fileDecimalTest::svgPair "$W$leading</svg>" "$W$plain</svg>"
+  }
+} -result {same same same same same}
+
+test fileDecimal-2.8 {stroke-width, miterlimit, dasharray, dashoffset, also in style=""} -body {
+  set line {<line x1="0" y1="0" x2="50" y2="0" stroke="red"}
+  lmap {leading plain} {
+    { stroke-width="010" stroke-miterlimit="010"/>}
+    { stroke-width="10" stroke-miterlimit="10"/>}
+    { stroke-width="08"/>} { stroke-width="8"/>}
+    { stroke-dasharray="010 02" stroke-dashoffset="010"/>}
+    { stroke-dasharray="10 2" stroke-dashoffset="10"/>}
+    { stroke-dasharray="08,09"/>} { stroke-dasharray="8,9"/>}
+    { style="stroke-width:010;stroke-dasharray:08 1"/>}
+    { style="stroke-width:10;stroke-dasharray:8 1"/>}
+  } {
+    ::fileDecimalTest::svgPair "$W$line$leading</svg>" "$W$line$plain</svg>"
+  }
+} -result {same same same same same}
+
+test fileDecimal-2.9 {units and per cent} -body {
+  ::fileDecimalTest::svgPair \
+      "$W<rect x=\"010px\" y=\"02mm\" width=\"050%\" height=\"01cm\" fill=\"red\"/><rect x=\"010%\" width=\"010pt\" height=\"05\" fill=\"blue\"/></svg>" \
+      "$W<rect x=\"10px\" y=\"2mm\" width=\"50%\" height=\"1cm\" fill=\"red\"/><rect x=\"10%\" width=\"10pt\" height=\"5\" fill=\"blue\"/></svg>"
+} -result same
+
+test fileDecimal-2.10 {rgb(), rgba() and their per cent} -body {
+  lmap {leading plain} {
+    {fill="rgb(0128,0,0)" stroke="rgb(0100,010,0)"}
+    {fill="rgb(128,0,0)" stroke="rgb(100,10,0)"}
+    {fill="rgb(050%,010%,0%)"} {fill="rgb(50%,10%,0%)"}
+    {fill="rgba(0128,0,0,00.5)"} {fill="rgba(128,0,0,0.5)"}
+  } {
+    ::fileDecimalTest::svgPair "$W<rect width=\"5\" height=\"5\" $leading/></svg>" \
+        "$W<rect width=\"5\" height=\"5\" $plain/></svg>"
+  }
+} -result {same same same}
+
+test fileDecimal-2.11 {an opacity is multiplied by an rgba() alpha before it is clamped} -body {
+  # fill-opacity="010" against an alpha of 0.1 is 1; Tcl 8.6 counted 0.8.
+  ::fileDecimalTest::svgPair \
+      "$W<rect width=\"5\" height=\"5\" fill=\"rgba(255,0,0,0.1)\" fill-opacity=\"010\"/><rect width=\"5\" height=\"5\" fill=\"rgba(255,0,0,0.5)\" fill-opacity=\"08\"/><g opacity=\"010\"><rect width=\"5\" height=\"5\" fill=\"red\" opacity=\"00.5\"/></g></svg>" \
+      "$W<rect width=\"5\" height=\"5\" fill=\"rgba(255,0,0,0.1)\" fill-opacity=\"10\"/><rect width=\"5\" height=\"5\" fill=\"rgba(255,0,0,0.5)\" fill-opacity=\"8\"/><g opacity=\"10\"><rect width=\"5\" height=\"5\" fill=\"red\" opacity=\"0.5\"/></g></svg>"
+} -result same
+
+test fileDecimal-2.12 {font-size, in per cent and as the em of a length; font-weight} -body {
+  lmap {leading plain} {
+    {<text x="0" y="20" font-size="010">A</text>}
+    {<text x="0" y="20" font-size="10">A</text>}
+    {<text x="0" y="20" font-size="08">A</text>}
+    {<text x="0" y="20" font-size="8">A</text>}
+    {<g font-size="10"><text x="0" y="20" font-size="0150%">A</text></g>}
+    {<g font-size="10"><text x="0" y="20" font-size="150%">A</text></g>}
+    {<g font-size="010"><rect width="02em" height="5" fill="red"/></g>}
+    {<g font-size="10"><rect width="2em" height="5" fill="red"/></g>}
+    {<text x="0" y="20" font-weight="0700">A</text>}
+    {<text x="0" y="20" font-weight="700">A</text>}
+  } {
+    ::fileDecimalTest::svgPair "$W$leading</svg>" "$W$plain</svg>"
+  }
+} -result {same same same same same}
+
+test fileDecimal-2.13 {text x and y, a tspan, use x and y, a nested svg} -body {
+  lmap {leading plain} {
+    {<text x="010 020" y="030">AB<tspan x="040" y="050">C</tspan></text>}
+    {<text x="10 20" y="30">AB<tspan x="40" y="50">C</tspan></text>}
+    {<defs><rect id="r" width="5" height="5" fill="red"/></defs><use href="#r" x="010" y="08"/>}
+    {<defs><rect id="r" width="5" height="5" fill="red"/></defs><use href="#r" x="10" y="8"/>}
+    {<svg x="010" y="010" width="040" height="020" viewBox="0 0 020 010"><rect width="20" height="10" fill="red"/></svg>}
+    {<svg x="10" y="10" width="40" height="20" viewBox="0 0 20 10"><rect width="20" height="10" fill="red"/></svg>}
+  } {
+    ::fileDecimalTest::svgPair "$W$leading</svg>" "$W$plain</svg>"
+  }
+} -result {same same same}
+
+test fileDecimal-2.14 {gradients: offsets, coordinates in both units, radial} -body {
+  set stops {<stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/>}
+  set rect {<rect width="50" height="50" fill="url(#g)"/>}
+  lmap {leading plain} [list \
+    {<linearGradient id="g"><stop offset="010%" stop-color="red"/><stop offset="090%" stop-color="blue"/></linearGradient>} \
+    {<linearGradient id="g"><stop offset="10%" stop-color="red"/><stop offset="90%" stop-color="blue"/></linearGradient>} \
+    {<linearGradient id="g"><stop offset="00.25" stop-color="red" stop-opacity="08"/><stop offset="01" stop-color="blue"/></linearGradient>} \
+    {<linearGradient id="g"><stop offset="0.25" stop-color="red" stop-opacity="8"/><stop offset="1" stop-color="blue"/></linearGradient>} \
+    "<linearGradient id=\"g\" x1=\"010%\" x2=\"090%\">$stops</linearGradient>" \
+    "<linearGradient id=\"g\" x1=\"10%\" x2=\"90%\">$stops</linearGradient>" \
+    "<linearGradient id=\"g\" gradientUnits=\"userSpaceOnUse\" x1=\"010\" x2=\"040\">$stops</linearGradient>" \
+    "<linearGradient id=\"g\" gradientUnits=\"userSpaceOnUse\" x1=\"10\" x2=\"40\">$stops</linearGradient>" \
+    "<radialGradient id=\"g\" cx=\"050%\" cy=\"050%\" r=\"010%\" fx=\"010%\">$stops</radialGradient>" \
+    "<radialGradient id=\"g\" cx=\"50%\" cy=\"50%\" r=\"10%\" fx=\"10%\">$stops</radialGradient>"] {
+    ::fileDecimalTest::svgPair "$W$leading$rect</svg>" "$W$plain$rect</svg>"
+  }
+} -result {same same same same same}
+
+test fileDecimal-2.15 {a clip path and a mask} -body {
+  list [::fileDecimalTest::svgPair \
+      "$W<clipPath id=\"c\"><rect x=\"010\" y=\"010\" width=\"030\" height=\"030\"/></clipPath><rect width=\"80\" height=\"80\" fill=\"red\" clip-path=\"url(#c)\"/></svg>" \
+      "$W<clipPath id=\"c\"><rect x=\"10\" y=\"10\" width=\"30\" height=\"30\"/></clipPath><rect width=\"80\" height=\"80\" fill=\"red\" clip-path=\"url(#c)\"/></svg>"] \
+      [::fileDecimalTest::svgPair \
+      "$W<mask id=\"m\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"080\" height=\"080\"><rect x=\"010\" width=\"040\" height=\"040\" fill=\"white\"/></mask><rect width=\"80\" height=\"80\" fill=\"red\" mask=\"url(#m)\"/></svg>" \
+      "$W<mask id=\"m\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"80\" height=\"80\"><rect x=\"10\" width=\"40\" height=\"40\" fill=\"white\"/></mask><rect width=\"80\" height=\"80\" fill=\"red\" mask=\"url(#m)\"/></svg>"]
+} -result {same same}
+
+test fileDecimal-2.16 {svg size reads the drawing's own size in decimal} -body {
+  set leading [::fileDecimalTest::writeFile z.svg {<svg width="020mm" height="010" viewBox="0 0 040 020"/>}]
+  set plain [::fileDecimalTest::writeFile p.svg {<svg width="20mm" height="10" viewBox="0 0 40 20"/>}]
+  set doc [tclpdf new -unit mm]
+  set result [expr {[$doc svg size $leading] eq [$doc svg size $plain]}]
+  $doc destroy
+  file delete $leading $plain
+  set result
+} -result 1
+
+test fileDecimal-2.17 {what the stream says: the zeros are gone, not just read} -body {
+  set doc [tclpdf new -compress 0 -unit pt]
+  $doc page add
+  $doc svg -data "$W<rect x=\"010\" width=\"010\" height=\"5\" fill=\"red\"/><polyline points=\"010,010 020,020\" stroke=\"red\" fill=\"none\"/></svg>" -at {0 0}
+  set content [$doc page content]
+  $doc destroy
+  list [regexp -all -inline {[-0-9. ]+ re} $content] \
+      [regexp -all -inline {[-0-9. ]+ [ml]\n} $content]
+} -result {{{10 0 10 5 re}} {{10 10 m
+} {20 20 l
+}}}
+
+test fileDecimal-2.18 {an id made of digits stays an id} -body {
+  # #0012 names the 5 x 5 rectangle, not the one whose id is 12.
+  set doc [tclpdf new -compress 0 -unit pt]
+  $doc page add
+  $doc svg -data "$W<defs><rect id=\"0012\" width=\"5\" height=\"5\" fill=\"red\"/><rect id=\"12\" width=\"9\" height=\"9\" fill=\"blue\"/></defs><use href=\"#0012\" x=\"20\"/></svg>" -at {0 0}
+  set content [$doc page content]
+  $doc destroy
+  regexp -all -inline {[-0-9. ]+ re} $content
+} -result {{0 0 5 5 re}}
+
+#
+# --- AFM and Type 1 ---------------------------------------------------------
+#
+
+# The AFM of NimbusSans-Regular with every number of the header and of the
+# character metrics written with a leading zero: 278 -> 0278, -20 -> -020,
+# 0 -> 00. The character code stays as it is unless KEEPCODE is 0.
+proc ::fileDecimalTest::padAfm {text {keepCode 1}} {
+  set out {}
+  foreach line [split $text \n] {
+    if {[regexp {^(Comment|Notice|Version|FullName|FontName|FamilyName|StartFontMetrics|Weight)} $line]} {
+      lappend out $line
+      continue
+    }
+    set new [regsub -all {(^|\s)(-?)([0-9]+)} $line {\1\20\3}]
+    if {$keepCode} {
+      regsub {^C 0} $new {C } new
+    }
+    lappend out $new
+  }
+  return [join $out \n]
+}
+
+proc ::fileDecimalTest::afm {} {
+  variable urw
+  return [::tclpdfTest::readBytes [file join $urw NimbusSans-Regular.afm]]
+}
+
+test fileDecimal-3.1 {an AFM with zeros: the same metrics} -body {
+  set leading [::fileDecimalTest::writeFile zero.afm [::fileDecimalTest::padAfm [::fileDecimalTest::afm]]]
+  set plain [::fileDecimalTest::writeFile plain.afm [::fileDecimalTest::afm]]
+  set result [expr {[::tclpdf::type1 metrics $leading] eq [::tclpdf::type1 metrics $plain]}]
+  file delete $leading $plain
+  set result
+} -result 1
+
+test fileDecimal-3.2 {and the same document, a Type 1 face embedded with it} -body {
+  set leading [::fileDecimalTest::writeFile zero.afm [::fileDecimalTest::padAfm [::fileDecimalTest::afm]]]
+  set plain [::fileDecimalTest::writeFile plain.afm [::fileDecimalTest::afm]]
+  set program [file join $::fileDecimalTest::urw NimbusSans-Regular.t1]
+  set script {$doc font embed s %P -metrics %M; $doc font -family s -size 12; $doc text {AVWay 0123} -at {10 20}}
+  set result [::fileDecimalTest::same \
+      [string map [list %P [list $program] %M [list $leading]] $script] \
+      [string map [list %P [list $program] %M [list $plain]] $script]]
+  file delete $leading $plain
+  set result
+} -result same
+
+test fileDecimal-3.3 {header values: bounding box, italic angle, heights, StdVW} -body {
+  set leading [::fileDecimalTest::writeFile s0.afm "StartFontMetrics 4.1\nFontName Probe\nFontBBox 0 -0210 01000 0700\nItalicAngle -012\nAscender 0700\nDescender -0210\nCapHeight 0650\nXHeight 0500\nStdVW 088\nStartCharMetrics 1\nC 32 ; WX 0250 ; N space ; B 0 0 0 0 ;\nEndCharMetrics\nEndFontMetrics\n"]
+  set plain [::fileDecimalTest::writeFile s1.afm "StartFontMetrics 4.1\nFontName Probe\nFontBBox 0 -210 1000 700\nItalicAngle -12\nAscender 700\nDescender -210\nCapHeight 650\nXHeight 500\nStdVW 88\nStartCharMetrics 1\nC 32 ; WX 250 ; N space ; B 0 0 0 0 ;\nEndCharMetrics\nEndFontMetrics\n"]
+  set a [::tclpdf::type1 metrics $leading]
+  set b [::tclpdf::type1 metrics $plain]
+  file delete $leading $plain
+  list [expr {$a eq $b}] [dict get $a bbox] [dict get $a italicAngle] \
+      [dict get $a stemV] [dict get $a widths]
+} -result {1 {0 -210 1000 700} -12 88 {space 250}}
+
+test fileDecimal-3.4 {the character code stays the key the file wrote} -body {
+  set path [::fileDecimalTest::writeFile c.afm "StartFontMetrics 4.1\nFontName Probe\nStartCharMetrics 2\nC 065 ; WX 0610 ; N A ; B 0 0 0610 0650 ;\nC 32 ; WX 250 ; N space ; B 0 0 0 0 ;\nEndCharMetrics\nEndFontMetrics\n"]
+  set metrics [::tclpdf::type1 metrics $path]
+  file delete $path
+  list [dict get $metrics codes] [dict get $metrics widths A]
+} -result {{065 A 32 space} 610}
+
+test fileDecimal-3.5 {the clear text of a Type 1 program: FontBBox and ItalicAngle} -body {
+  set bytes [::tclpdfTest::readBytes [file join $::fileDecimalTest::urw NimbusSans-Regular.t1]]
+  set zeros [string map {{/FontBBox {-210 -299 1032 1075}} {/FontBBox {-0210 -0299 01032 01075}}
+      {/ItalicAngle 0.0} {/ItalicAngle 00.0}} $bytes]
+  set a [::tclpdf::type1 parse $zeros]
+  set b [::tclpdf::type1 parse $bytes]
+  list [expr {$zeros ne $bytes}] [dict get $a bbox] [dict get $a italicAngle] \
+      [expr {[dict get $a bbox] eq [dict get $b bbox]}]
+} -result {1 {-210 -299 1032 1075} 0.0 1}
+
+test fileDecimal-3.6 {charstring counts with zeros: every glyph is still found} -body {
+  set bytes [::tclpdfTest::readBytes [file join $::fileDecimalTest::urw NimbusSans-Regular.t1]]
+  set plain [::tclpdf::type1::Decrypt [dict get [::tclpdf::type1 parse $bytes] encrypted] 55665 0]
+  # "/name 123 RD <123 bytes> ND" becomes "/name 0123 RD ...", walked as
+  # [type1 glyphs] walks it so that the bytes themselves are not touched.
+  set at [expr {[string first begin $plain [string first /CharStrings $plain]] + 5}]
+  set padded [string range $plain 0 [expr {$at - 1}]]
+  set count 0
+  while {[regexp -start $at -indices {\s*/[^\s/{}()\[\]<>]+\s+(\d+)\s+\S+\s} $plain whole length]
+      && [lindex $whole 0] == $at} {
+    set n [string range $plain {*}$length]
+    append padded [string range $plain $at [expr {[lindex $length 0] - 1}]] 0$n \
+        [string range $plain [expr {[lindex $length 1] + 1}] [expr {[lindex $whole 1] + $n}]]
+    set at [expr {[lindex $whole 1] + $n + 1}]
+    # and the closing token, ND or a synonym
+    regexp -start $at -indices {\s*\S+} $plain token
+    append padded [string range $plain $at [lindex $token 1]]
+    set at [expr {[lindex $token 1] + 1}]
+    incr count
+  }
+  append padded [string range $plain $at end]
+  set a [::tclpdf::type1 glyphs [dict create encrypted [::tclpdfTest::type1Encrypt $padded 55665]]]
+  set b [::tclpdf::type1 glyphs [dict create encrypted [::tclpdfTest::type1Encrypt $plain 55665]]]
+  list [expr {$count > 800}] [dict size $a] [expr {$a eq $b}]
+} -result {1 855 1}
+
+#
+# --- CFF real numbers -------------------------------------------------------
+#
+
+test fileDecimal-4.1 {the nibbles of a real are a decimal number} -body {
+  # 0 1 2 = 12, 0 8 = 8, 0 0 . 5 = 0.5, - 0 1 2 = -12; FontBBox (5) takes
+  # them. Against the same four numbers encoded without the zeros.
+  list [::tclpdf::sfnt::CffDict [binary format c* {30 0x01 0x2f 30 0x08 0xff 30 0x00 0xa5 0xff 30 0xe0 0x12 0xff 5}]] \
+      [::tclpdf::sfnt::CffDict [binary format c* {30 0x12 0xff 30 0x8f 30 0x0a 0x5f 30 0xe1 0x2f 5}]]
+} -result {{5 {12 8 0.5 -12}} {5 {12 8 0.5 -12}}}
+
+#
+# --- libhyphen pattern files ------------------------------------------------
+#
+
+# The package has no unload: the table is put back after this section, so
+# that a test file run after this one in the same interpreter does not find
+# the tags loaded here (as decimal-5.3 does).
+set ::fileDecimalTest::savedHyphenation $::tclpdf::hyphenate::loaded
+
+# A pattern file with one pattern - a break may come before every "ba" -
+# and the directives given; loaded under a tag of its own, answered as what
+# [languages] says without the tag and how one word is broken: sixteen
+# letters unless WORD names another.
+proc ::fileDecimalTest::hyphenation {directives {word babababababababa}} {
+  variable count
+  incr count
+  set path [::fileDecimalTest::writeFile h$count.dic "ISO8859-1\n$directives\n"]
+  ::tclpdf::hyphenate load en-x$count $path
+  file delete $path
+  return [list [dict remove [::tclpdf::hyphenate languages en-x$count] tag] \
+      [::tclpdf::hyphenate word en-x$count $word]]
+}
+
+test fileDecimal-5.1 {LEFTHYPHENMIN 010 and RIGHTHYPHENMIN 02} -body {
+  expr {[::fileDecimalTest::hyphenation "LEFTHYPHENMIN 010\nRIGHTHYPHENMIN 02\n1ba"]
+      eq [::fileDecimalTest::hyphenation "LEFTHYPHENMIN 10\nRIGHTHYPHENMIN 2\n1ba"]}
+} -result 1
+
+test fileDecimal-5.2 {LEFTHYPHENMIN 08 is eight letters, not a refusal} -body {
+  list [::fileDecimalTest::hyphenation "LEFTHYPHENMIN 08\nRIGHTHYPHENMIN 03\n1ba"] \
+      [expr {[::fileDecimalTest::hyphenation "LEFTHYPHENMIN 08\nRIGHTHYPHENMIN 03\n1ba"]
+          eq [::fileDecimalTest::hyphenation "LEFTHYPHENMIN 8\nRIGHTHYPHENMIN 3\n1ba"]}]
+} -result {{{patterns 1 exceptions 0 left 8 right 3 min 5} {babababa ba ba baba}} 1}
+
+test fileDecimal-5.3 {the two compound minima, on a word with room for a joint} -body {
+  # Twenty letters. A joint of the compound table stands from the compound
+  # left minimum up to letter 20 - 9 = 11: a minimum of 10 finds the joint
+  # at 10 alone, one of 8 - what Tcl 8.6 makes of "010" read as it stands -
+  # finds the one at 8 as well, and the last part then breaks again at 18.
+  # On the sixteen letters of the other tests no joint has room at all, and
+  # 8 and 10 broke the word alike.
+  set word babababababababababa
+  set zeros [::fileDecimalTest::hyphenation "LEFTHYPHENMIN 2\nRIGHTHYPHENMIN 2\nCOMPOUNDLEFTHYPHENMIN 010\nCOMPOUNDRIGHTHYPHENMIN 09\n1ba\nNEXTLEVEL\n1ba" $word]
+  list [lindex $zeros 1] \
+      [expr {$zeros eq [::fileDecimalTest::hyphenation "LEFTHYPHENMIN 2\nRIGHTHYPHENMIN 2\nCOMPOUNDLEFTHYPHENMIN 10\nCOMPOUNDRIGHTHYPHENMIN 9\n1ba\nNEXTLEVEL\n1ba" $word]}] \
+      [expr {$zeros ne [::fileDecimalTest::hyphenation "LEFTHYPHENMIN 2\nRIGHTHYPHENMIN 2\nCOMPOUNDLEFTHYPHENMIN 8\nCOMPOUNDRIGHTHYPHENMIN 9\n1ba\nNEXTLEVEL\n1ba" $word]}]
+} -result {{bababababa bababababa} 1 1}
+
+test fileDecimal-5.4 {a paragraph set with such a file is the same file} -body {
+  set leading [::fileDecimalTest::writeFile hz.dic "ISO8859-1\nLEFTHYPHENMIN 010\nRIGHTHYPHENMIN 02\n1ba\n"]
+  set plain [::fileDecimalTest::writeFile hp.dic "ISO8859-1\nLEFTHYPHENMIN 10\nRIGHTHYPHENMIN 2\n1ba\n"]
+  ::tclpdf::hyphenate load en-y1 $leading
+  ::tclpdf::hyphenate load en-y2 $plain
+  file delete $leading $plain
+  # 50 points is the width at which a left minimum of eight and one of ten
+  # break the word in different places (measured).
+  ::fileDecimalTest::same \
+      {$doc font -family helvetica -size 10; $doc text babababababababa -at {10 20} -width 50 -hyphenate en-y1} \
+      {$doc font -family helvetica -size 10; $doc text babababababababa -at {10 20} -width 50 -hyphenate en-y2}
+} -result same
+
+set ::tclpdf::hyphenate::loaded $::fileDecimalTest::savedHyphenation
+
+#
+# --- what the reading must not cost ----------------------------------------
+#
+
+# The test in front of [pdfObj decimal] is a [regexp] wherever the value comes
+# out of a [regexp] (see [type1 Int] and [svgPath numbers]): [string match]
+# against such a value converts the shared pattern literal of [pdfObj num] to
+# Tcl's unicode representation, and every later [string match] with it is
+# slower - measured 2 to 3 % on example 02.07. Asked in a fresh interpreter,
+# because the one running the suite has drawn SVG long before this test.
+
+test fileDecimal-6.1 {reading an AFM and a Type 1 program leaves the pattern literal alone} -body {
+  ::tclpdfTest::freshInterp [string map [list %U [list $::fileDecimalTest::urw]] {
+    package require tclpdf
+    package require tclpdf::type1
+    proc pattern {} { return {0[0-9]*} }
+    set urw %U
+    ::tclpdf::type1 metrics [file join $urw NimbusSans-Regular.afm]
+    set channel [open [file join $urw NimbusSans-Regular.t1] rb]
+    ::tclpdf::type1 glyphs [::tclpdf::type1 parse [read $channel]]
+    close $channel
+    puts [lindex [::tcl::unsupported::representation [pattern]] 3]
+  }]
+} -result pure
+
+test fileDecimal-6.2 {nor does a colour name, a CFF real or a pattern file} -body {
+  set path [::fileDecimalTest::writeFile h.dic "ISO8859-1\nLEFTHYPHENMIN 2\nCOMPOUNDLEFTHYPHENMIN 3\n1ba\n"]
+  set result [::tclpdfTest::freshInterp [string map [list %P [list $path]] {
+    package require tclpdf
+    package require tclpdf::color
+    package require tclpdf::sfnt
+    package require tclpdf::hyphenate
+    proc pattern {} { return {0[0-9]*} }
+    regexp {(\w+)} "steelblue" -> name
+    ::tclpdf::color parse $name
+    ::tclpdf::sfnt::CffDict [binary format c* {30 0x12 0xff 5}]
+    ::tclpdf::hyphenate load en-x %P
+    puts [lindex [::tcl::unsupported::representation [pattern]] 3]
+  }]]
+  file delete $path
+  set result
+} -result pure
+
+#
+# --- attributes, read by the built-in parser --------------------------------
+#
+
+# Without tdom the drawing is parsed by [xml Parse], and its [Attributes]
+# picked the double- or the single-quoted value with an [expr] ternary - which
+# hands a numeric-looking value back as a number: under Tcl 8.6 "010" came
+# out as 8 and "0x1A" as 26, before any SVG reader saw them. An attribute is
+# text; what it means is the reader's business. tdom never had the fault, so
+# these tests switch it off and put the switch back whatever happens.
+
+test fileDecimal-7.1 {Attributes hands every value back as it was written} -body {
+  ::tclpdf::xml::Attributes { x="010" y='08' z="0x1A" w='0012.5'}
+} -result {x 010 y 08 z 0x1A w 0012.5}
+
+test fileDecimal-7.2 {and so does xml parse without tdom, quoted either way} -setup {
+  package require tclpdf::xml
+  set savedTdom $::tclpdf::xml::haveTdom
+  set ::tclpdf::xml::haveTdom 0
+} -body {
+  set handle [::tclpdf::xml parse {<a x="010" y='08' z="0x1A"/>}]
+  set node [::tclpdf::xml root $handle]
+  set values {}
+  foreach name {x y z} {
+    lappend values [::tclpdf::xml attribute $node $name]
+  }
+  ::tclpdf::xml release $handle
+  list [::tclpdf::xml parser] $values \
+      [expr {[lindex $values 0] eq "010"}] [expr {[lindex $values 2] eq "0x1A"}]
+} -cleanup {
+  set ::tclpdf::xml::haveTdom $savedTdom
+  unset -nocomplain savedTdom handle node values name
+} -result {tclpdf {010 08 0x1A} 1 1}
+
+test fileDecimal-7.3 {both parsers read the same text} -body {
+  package require tclpdf::xml
+  ::tclpdfTest::bothParsers {
+    set handle [::tclpdf::xml parse {<a x="010" y='08' z="0x1A"/>}]
+    set node [::tclpdf::xml root $handle]
+    set values {}
+    foreach name {x y z} {
+      lappend values [::tclpdf::xml attribute $node $name]
+    }
+    ::tclpdf::xml release $handle
+    set values
+  }
+} -cleanup {
+  unset -nocomplain handle node values name
+} -result {{010 08 0x1A}}
+
+test fileDecimal-7.4 {a rectangle with zeros, drawn without tdom, is the same file} -setup {
+  package require tclpdf::xml
+  set savedTdom $::tclpdf::xml::haveTdom
+  set ::tclpdf::xml::haveTdom 0
+} -body {
+  list [::fileDecimalTest::svgPair \
+      "$W<rect x=\"010\" y=\"020\" width=\"010\" height=\"010\" fill=\"red\"/></svg>" \
+      "$W<rect x=\"10\" y=\"20\" width=\"10\" height=\"10\" fill=\"red\"/></svg>"] \
+      [::fileDecimalTest::svgPair \
+      "$W<rect x='010' y='08' width='010' height='010' fill='red'/></svg>" \
+      "$W<rect x='10' y='8' width='10' height='10' fill='red'/></svg>"]
+} -cleanup {
+  set ::tclpdf::xml::haveTdom $savedTdom
+  unset -nocomplain savedTdom
+} -result {same same}
+
+unset W
+cleanupTests

@@ -20,6 +20,8 @@
 #
 
 package require Tcl 8.6.11-
+package require tclpdf::pdfObj 1.9-
+package require tclpdf::svgPath 1.5-
 package require tclpdf::document 1.0-
 
 # The elements this module has a case for - the same names its switch takes,
@@ -207,7 +209,8 @@ oo::define ::tclpdf::document::document {
     my state svgFontSize $outer
     try {
       if {[string match {*%} $value]} {
-        set number [string trimright $value %]
+        # In decimal, as every number of the drawing ([svgPath numbers]).
+        set number [::tclpdf::pdfObj::decimal [string trimright $value %]]
         set size [expr {[::tclpdf::option finite $number]
             ? $number / 100.0 * $outer : $outer}]
       } else {
@@ -690,8 +693,11 @@ oo::define ::tclpdf::document::document {
             [my SvgLength [::tclpdf::xml attribute $node y2] 0 y]] l\n"
       }
       polyline - polygon {
-        set numbers [regexp -all -inline \
-            {[-+]?(?:[0-9]*\.[0-9]+|[0-9]+\.?)(?:[eE][-+]?[0-9]+)?} \
+        # Read in decimal ([svgPath numbers]): "010,010" is ten and ten.
+        # Until 2026-11-07 the numbers went into the stream as written -
+        # "010 010 m" under both interpreters, measured - and "08" stopped
+        # the whole drawing under Tcl 8.6.
+        set numbers [::tclpdf::svgPath::numbers \
             [::tclpdf::xml attribute $node points]]
         # AN ODD NUMBER OF COORDINATES IS AN ERROR, and SVG 1.1, 9.6/9.7 say
         # what to do with it: "the element is in error ... the document shall
@@ -1008,7 +1014,8 @@ oo::define ::tclpdf::document::document {
     # see in [svg info], instead of one nobody mentions. "bolder" is taken
     # as bold - relative to what, when the parent is the drawing itself, has
     # no answer this package could give.
-    set weight [string trim [dict get $style font-weight]]
+    # A number in decimal: "0700" is seven hundred, which Tcl 8.6 read as 448.
+    set weight [::tclpdf::pdfObj::decimal [string trim [dict get $style font-weight]]]
     set cut {}
     if {$weight in {bold bolder} ||
         ([string is integer -strict $weight] && $weight >= 600)} {
@@ -1151,4 +1158,4 @@ oo::define ::tclpdf::document::document {
   # operators are the only description of the shape available here.
 }
 
-package provide tclpdf::svgElement 1.7
+package provide tclpdf::svgElement 1.8

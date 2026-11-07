@@ -120,12 +120,12 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::pdfObj 1.0-
+package require tclpdf::pdfObj 1.9-
 package require tclpdf::option 1.4-
 package require tclpdf::color 1.0-
 package require tclpdf::geometry 1.0-
-package require tclpdf::xml 1.0-
-package require tclpdf::svgPath 1.0-
+package require tclpdf::xml 1.3-
+package require tclpdf::svgPath 1.5-
 package require tclpdf::io 1.0-
 package require tclpdf::afm 1.0-
 package require tclpdf::text 1.0-
@@ -863,11 +863,14 @@ oo::define ::tclpdf::document::document {
     if {![regexp -nocase {^\s*rgba?\s*\((.*)\)\s*$} $value -> inside]} {
       return [list $value 1]
     }
+    # Each component read in decimal ([pdfObj decimal]): rgb(0128,0,0) is
+    # 128 and rgb(010,0,0) ten, where Tcl 8.6 refused the first and read the
+    # second as eight. A per cent is read the same way below.
     set parts {}
     foreach part [split [string map {, " "} $inside]] {
       set part [string trim $part]
       if {$part ne {}} {
-        lappend parts $part
+        lappend parts [::tclpdf::pdfObj::decimal $part]
       }
     }
     if {[llength $parts] < 3} {
@@ -876,7 +879,7 @@ oo::define ::tclpdf::document::document {
     set channels {}
     foreach part [lrange $parts 0 2] {
       if {[string index $part end] eq "%"} {
-        set number [string range $part 0 end-1]
+        set number [::tclpdf::pdfObj::decimal [string range $part 0 end-1]]
         if {![string is double -strict $number]} {
           return [list $value 1]
         }
@@ -972,8 +975,7 @@ oo::define ::tclpdf::document::document {
   method SvgViewBox {root} {
     set box [::tclpdf::xml attribute $root viewBox]
     if {$box ne {}} {
-      set numbers [regexp -all -inline \
-          {[-+]?(?:[0-9]*\.[0-9]+|[0-9]+\.?)(?:[eE][-+]?[0-9]+)?} $box]
+      set numbers [::tclpdf::svgPath::numbers $box]
       if {[llength $numbers] >= 4} {
         return [lrange $numbers 0 3]
       }
@@ -1002,8 +1004,10 @@ oo::define ::tclpdf::document::document {
   # allows, was read as a length of -0.2 in the drawing.
   method SvgFraction {value extent origin units {axis x}} {
     set fractional [expr {$units ne "userSpaceOnUse"}]
+    # Both numbers read in decimal before anything counts with them, as
+    # [SvgLength] reads its own: x1="010%" is a tenth, not eight hundredths.
     if {[string match {*%} $value]} {
-      set number [string trimright $value %]
+      set number [::tclpdf::pdfObj::decimal [string trimright $value %]]
       if {![::tclpdf::option finite $number]} {
         return $origin
       }
@@ -1012,6 +1016,7 @@ oo::define ::tclpdf::document::document {
       }
       return [my SvgLength $value 0 $axis]
     }
+    set value [::tclpdf::pdfObj::decimal $value]
     if {![string is double -strict $value]} {
       return $origin
     }
@@ -1030,11 +1035,17 @@ oo::define ::tclpdf::document::document {
   # round, which is how they stood until 2026-08-27, every skewX came out as
   # a skewY and back: "skewX(30)" wrote "1 0.57735 0 1 0 0 cm", and the two
   # fields of example 03.03 stood swapped under their own captions.
+  #
+  # The arguments are read by the drawing's one number reader, in decimal:
+  # "translate(010 010)" is ten and ten. Until 2026-11-07 they were cut out
+  # with [-+0-9.eE]+, a pattern of their own that took "1-2" and ".5.5" for
+  # one number each where SVG reads two (F.6, the grammar of path data) -
+  # measured, both cost the whole drawing under Tcl's ARITH DOMAIN.
   method SvgTransform {text} {
     set matrix [::tclpdf::geometry identity]
     foreach {-> function arguments} [regexp -all -inline \
         {([a-zA-Z]+)\s*\(([^)]*)\)} $text] {
-      set numbers [regexp -all -inline {[-+0-9.eE]+} $arguments]
+      set numbers [::tclpdf::svgPath::numbers $arguments]
       switch -- $function {
         translate {
           lassign $numbers tx ty
@@ -1090,7 +1101,10 @@ oo::define ::tclpdf::document::document {
   # [-+0-9.eE]+, which swallowed the "e" of "2em" and left "2e" - a value
   # that reached [pdfObj num] and cost the WHOLE drawing under a code from a
   # module the caller had never spoken to (TCLPDF PDFOBJ NUMBER 2e). The
-  # grammar below is the one svgPath.tcl already tokenises with.
+  # grammar is the one svgPath.tcl tokenises with, and it is read there:
+  # [svgPath length] hands back the number IN DECIMAL, so width="020" is
+  # twenty under Tcl 8.6 as under Tcl 9 and "08" is eight, not a number Tcl
+  # 8.6 refuses (SVG 1.1, 4.2 knows decimal numbers only).
   #
   # axis says which viewport extent a per cent refers to (7.10): x, y, or d
   # for the normalised diagonal, which is what a radius and a dash pattern
@@ -1100,10 +1114,11 @@ oo::define ::tclpdf::document::document {
     if {$value eq {} || $value eq "none"} {
       return $default
     }
-    if {![regexp {^\s*([-+]?(?:[0-9]*\.[0-9]+|[0-9]+\.?)(?:[eE][-+]?[0-9]+)?)\s*([a-zA-Z%]*)\s*$} \
-        $value -> number unit]} {
+    set read [::tclpdf::svgPath::length $value]
+    if {![llength $read]} {
       return $default
     }
+    lassign $read number unit
     switch -- [string tolower $unit] {
       {} - px {return $number}
       pt {return $number}

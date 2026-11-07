@@ -20,6 +20,8 @@
 #
 
 package require Tcl 8.6.11-
+package require tclpdf::pdfObj 1.9-
+package require tclpdf::svgPath 1.5-
 package require tclpdf::document 1.0-
 
 oo::define ::tclpdf::document::document {
@@ -372,8 +374,10 @@ oo::define ::tclpdf::document::document {
     if {$value eq {} || $value eq "none"} {
       return {}
     }
-    set numbers [regexp -all -inline -- \
-        {[-+]?(?:[0-9]*\.)?[0-9]+(?:[eE][-+]?[0-9]+)?} $value]
+    # Read by the drawing's one number reader, in decimal ([svgPath
+    # numbers]): "010 2" is ten and two. The pattern that stood here was a
+    # copy of its own and had already drifted from the others.
+    set numbers [::tclpdf::svgPath::numbers $value]
     if {![llength $numbers]} {
       return {}
     }
@@ -429,6 +433,18 @@ oo::define ::tclpdf::document::document {
     # !important" reached the colour module whole and cost the drawing.
     dict for {key value} [my SvgDeclarations [::tclpdf::xml attribute $node style]] {
       dict set style $key $value
+    }
+    # The three opacities in decimal ([pdfObj decimal]), because one of them
+    # is multiplied BEFORE it is clamped - by the alpha of an rgba() fill
+    # below - and fill-opacity="010" against an alpha of 0.1 is 1, where Tcl
+    # 8.6 counted 0.8. The lengths among the properties are read where they
+    # are used, by [SvgLength].
+    # A [regexp] in front, not [string match] - see [svgPath numbers].
+    foreach key {opacity fill-opacity stroke-opacity} {
+      set value [dict get $style $key]
+      if {[regexp {^[-+]?0[0-9]} $value]} {
+        dict set style $key [::tclpdf::pdfObj::decimal $value]
+      }
     }
     # currentColor, which is a <paint> in its own right (SVG 4.2 and 11.3):
     # it stands for the value of the "color" property, whose initial value is
@@ -556,14 +572,16 @@ oo::define ::tclpdf::document::document {
 
   # A number in objectBoundingBox units: a fraction, or a per cent of one.
   # Values outside 0..1 are legal there (13.2.3 puts a focus outside the box).
+  # Read in decimal, as every number of the drawing: "010%" is a tenth.
   method SvgUnitValue {value default} {
     if {[string match {*%} $value]} {
-      set value [string trimright $value %]
+      set value [::tclpdf::pdfObj::decimal [string trimright $value %]]
       if {![::tclpdf::option finite $value]} {
         return $default
       }
       return [expr {$value / 100.0}]
     }
+    set value [::tclpdf::pdfObj::decimal $value]
     if {![::tclpdf::option finite $value]} {
       return $default
     }
@@ -767,14 +785,15 @@ oo::define ::tclpdf::document::document {
         continue
       }
       set declarations [my SvgDeclarations [::tclpdf::xml attribute $child style]]
-      set offset [::tclpdf::xml attribute $child offset 0]
+      # In decimal, the per cent as the fraction: offset="010%" is a tenth.
+      set offset [::tclpdf::pdfObj::decimal [::tclpdf::xml attribute $child offset 0]]
       if {[string match {*%} $offset]} {
         # Only a number gets divided. offset="NaN%" and offset="oops%" both
         # went into [expr] as an operand of "/" and came back in Tcl's words
         # rather than this package's (measured 2026-08-27); handed on
         # untouched they take the same road as offset="NaN" without the per
         # cent, which [shading] refuses by name.
-        set number [string trimright $offset %]
+        set number [::tclpdf::pdfObj::decimal [string trimright $offset %]]
         if {[::tclpdf::option finite $number]} {
           set offset [expr {$number / 100.0}]
         } else {
@@ -816,4 +835,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::svgPaint 1.8
+package provide tclpdf::svgPaint 1.9

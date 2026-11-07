@@ -456,7 +456,12 @@ proc ::tclpdf::xml::Attributes {text} {
   set result {}
   foreach {-> name value quoted} [regexp -all -inline \
       {([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')} $text] {
-    dict set result $name [Unescape [expr {$value ne {} ? $value : $quoted}]]
+    # Not a ternary in expr: expr would read a numeric-looking value such as
+    # 010 as a number and hand back 8 under Tcl 8.6.
+    if {$value eq {}} {
+      set value $quoted
+    }
+    dict set result $name [Unescape $value]
   }
   return $result
 }
@@ -476,4 +481,4 @@ proc ::tclpdf::xml::Unescape {text} {
   return [string map {&amp; &} $text]
 }
 
-package provide tclpdf::xml 1.2
+package provide tclpdf::xml 1.3

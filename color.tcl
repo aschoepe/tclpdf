@@ -56,7 +56,7 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::pdfObj 1.0-
+package require tclpdf::pdfObj 1.9-
 package require tclpdf::io 1.0-
 package require tclpdf::option 1.0-
 package require tclpdf::pdfFunction 1.0-
@@ -168,7 +168,16 @@ proc ::tclpdf::color::parse {spec} {
     if {[string index $single 0] eq "#"} {
       return [Achromatic [Hex [string range $single 1 end]]]
     }
-    if {[string is double -strict $single]} {
+    # "08" is a grey of eight, clamped as [Pin] reads it in decimal - not an
+    # unknown colour name. The second test is a [regexp] and runs only for
+    # what is no number to Tcl, a colour name mostly: [string match] against
+    # a name that carries Tcl's unicode representation would convert the
+    # shared pattern literal of [pdfObj num] (see [svgPath numbers]). Only a
+    # value that IS a number once read in decimal is a grey: "08x" stays an
+    # unknown colour, as it was, and is not refused as a component.
+    if {[string is double -strict $single]
+        || ([regexp {^[-+]?0[0-9]} $single]
+            && [string is double -strict [::tclpdf::pdfObj::decimal $single]])} {
       return [list gray [list [Clamp $single]]]
     }
     set key [string tolower $single]
@@ -1109,7 +1118,12 @@ proc ::tclpdf::color::LabComponents {values range} {
 # A number and nothing else, kept as a double so that two spellings of one
 # white point - {0.9642 1 0.8249} and {0.9642 1.0 0.8249} - are one space and
 # get one resource entry rather than two.
+#
+# Read in decimal first, as [Pin] reads: -range {-0100 0100 ...} is a hundred.
 proc ::tclpdf::color::Double {value option} {
+  if {[string match {0[0-9]*} $value] || [string match {[-+]0[0-9]*} $value]} {
+    set value [::tclpdf::pdfObj::decimal $value]
+  }
   if {![string is double -strict $value]} {
     return -code error -errorcode [list TCLPDF COLOUR LAB $option] \
         "tclpdf: $option takes numbers, got \"$value\""
@@ -1523,7 +1537,17 @@ proc ::tclpdf::color::Clamp {value} {
 # A component against the range its space gives it - 0..1 for the device
 # spaces, 0..100 and the space's own /Range for Lab. The value is returned as
 # it was written when it is inside, so that {rgb 0.2 ...} still says 0.2.
+#
+# READ IN DECIMAL FIRST ([pdfObj decimal]), and this is the place for it
+# because every component of every space comes through here. Tcl 8.6 reads
+# "050" as octal forty and refuses "08" as no number; a caller who writes
+# {lab 050 0 0} means fifty and one who writes {gray 08} means eight, which
+# is clamped to 1 exactly as {gray 8} is. The value then comes back in its
+# decimal spelling, so the two calls write the same bytes.
 proc ::tclpdf::color::Pin {value low high} {
+  if {[string match {0[0-9]*} $value] || [string match {[-+]0[0-9]*} $value]} {
+    set value [::tclpdf::pdfObj::decimal $value]
+  }
   if {![string is double -strict $value]} {
     return -code error -errorcode [list TCLPDF COLOUR COMPONENTS number] \
         "tclpdf: colour component is not a number: \"$value\""
@@ -1584,4 +1608,4 @@ proc ::tclpdf::color::Unplaceable {value} {
   return [expr {![::tclpdf::option finite $value]}]
 }
 
-package provide tclpdf::color 1.11
+package provide tclpdf::color 1.12

@@ -35,44 +35,10 @@ namespace eval ::decimalTest {
   variable fonts [file join $root examples assets fonts]
 }
 
-# The bytes of a document made by SCRIPT, which sees the document as $doc.
-# Uncompressed, so a difference shows in the content, and with a fixed
-# creation date and file identifier, so two documents made a second apart
-# are the same file.
-proc ::decimalTest::bytes {script {options {}}} {
-  set doc [tclpdf new -compress 0 -unit pt {*}$options]
-  $doc info CreationDate "D:20260101000000+01'00'"
-  [$doc writer] id [string repeat \x01 16]
-  try {
-    $doc page add
-    uplevel 1 [list set doc $doc]
-    uplevel 1 $script
-    set path [::tclpdfTest::scratch decimal-[pid].pdf]
-    $doc write $path
-    set result [::tclpdfTest::readBytes $path]
-    file delete $path
-  } finally {
-    $doc destroy
-  }
-  return $result
-}
-
-# Whether the two scripts write the same file. "same" when they do, and
-# otherwise the first line of the file where they part - which is what a
-# failure has to show.
-proc ::decimalTest::same {leading plain {options {}}} {
-  set a [uplevel 1 [list ::decimalTest::bytes $leading $options]]
-  set b [uplevel 1 [list ::decimalTest::bytes $plain $options]]
-  if {$a eq $b} {
-    return same
-  }
-  foreach x [split $a \n] y [split $b \n] {
-    if {$x ne $y} {
-      return [list differ $x $y]
-    }
-  }
-  return differ
-}
+# A document's bytes, and whether two scripts write the same file - see
+# [::tclpdfTest::fixedBytes] and [::tclpdfTest::sameBytes] in helper.tcl.
+interp alias {} ::decimalTest::bytes {} ::tclpdfTest::fixedBytes
+interp alias {} ::decimalTest::same {} ::tclpdfTest::sameBytes
 
 # What a script answers, or its -errorcode where it is refused.
 proc ::decimalTest::outcome {script} {
@@ -411,5 +377,81 @@ test decimal-5.4 {a refused -face is quoted as written} -body {
   $doc destroy
   set result
 } -result {{error {TCLPDF FONT FACE -01}} {error {TCLPDF COLORFONT FACE -01}} {error {TCLPDF FONT FACE -00.5}} {error {TCLPDF COLORFONT FACE -00.5}}}
+
+#
+# --- colour components ------------------------------------------------------
+#
+# Read in decimal where every component of every space passes, [color Pin],
+# and where a Lab space takes its parameters, [color Double]. Measured
+# 2026-11-07 under 8.6.18 before: {gray 08}, {rgb 08 0 0}, {cmyk 0 0 0 08}
+# and a separation tint 08 were refused (TCLPDF COLOUR COMPONENTS number),
+# a bare 08 was an unknown colour, -range {-0100 0100 ...} wrote /Range
+# [-64 64 -64 64], and under Tcl 9 a DeviceN colour with a component 01 got
+# a resource name of its own beside the one written with 1. A device
+# component is clamped to 0..1, so 08 is 1 - exactly what 8 is.
+
+test decimal-6.1 {gray, rgb, cmyk and a bare number with a leading zero} -body {
+  lmap {leading plain} {
+    {gray 08} {gray 8}  {gray 00} {gray 0}  08 8  00.5 0.5
+    {rgb 08 0 01} {rgb 8 0 1}  {08 0 01} {8 0 1}
+    {cmyk 0 0 0 08} {cmyk 0 0 0 8}  {0 0 0 08} {0 0 0 8}
+  } {
+    ::decimalTest::same "\$doc rect -at {10 10} -size {5 5} -fill [list $leading]" \
+        "\$doc rect -at {10 10} -size {5 5} -fill [list $plain]"
+  }
+} -result {same same same same same same same same}
+
+test decimal-6.2 {Lab: the components and the parameters of the space} -body {
+  lmap {leading plain} {
+    {lab 050 -010 020} {lab 50 -10 20}
+    {lab 08 -08 09} {lab 8 -8 9}
+    {lab 50 0 0 -whitePoint {0.9505 01 1.089} -range {-0100 0100 -0100 0100}}
+    {lab 50 0 0 -whitePoint {0.9505 1 1.089} -range {-100 100 -100 100}}
+  } {
+    ::decimalTest::same "\$doc rect -at {10 10} -size {5 5} -fill [list $leading]" \
+        "\$doc rect -at {10 10} -size {5 5} -fill [list $plain]"
+  }
+} -result {same same same}
+
+test decimal-6.3 {a separation tint, a DeviceN colour, a font colour} -body {
+  list [::decimalTest::same \
+      {$doc rect -at {10 10} -size {5 5} -fill {separation Spot {cmyk 0 01 0 0} 08}} \
+      {$doc rect -at {10 10} -size {5 5} -fill {separation Spot {cmyk 0 1 0 0} 8}}] \
+      [::decimalTest::same \
+      {$doc rect -at {10 10} -size {5 5} -fill {devicen {{Spot {cmyk 0 01 0 0}} {Other {cmyk 01 0 0 0}}} {08 00.5}}} \
+      {$doc rect -at {10 10} -size {5 5} -fill {devicen {{Spot {cmyk 0 1 0 0}} {Other {cmyk 1 0 0 0}}} {8 0.5}}}] \
+      [::decimalTest::same \
+      {$doc font -family helvetica -size 10 -color {lab 050 0 0}; $doc text A -at {10 10}} \
+      {$doc font -family helvetica -size 10 -color {lab 50 0 0}; $doc text A -at {10 10}}]
+} -result {same same same}
+
+test decimal-6.4 {the colours of a shading: stops and the vertices of a mesh} -body {
+  list [::decimalTest::same \
+      {$doc shading axial -at {0 0} -size {10 10} -colors {{rgb 08 0 0} {rgb 0 0 01}}} \
+      {$doc shading axial -at {0 0} -size {10 10} -colors {{rgb 8 0 0} {rgb 0 0 1}}}] \
+      [::decimalTest::same \
+      {$doc shading triangles -vertices {{0 0 {gray 08}} {10 0 {gray 01}} {0 10 {gray 0}}}} \
+      {$doc shading triangles -vertices {{0 0 {gray 8}} {10 0 {gray 1}} {0 10 {gray 0}}}}]
+} -result {same same}
+
+test decimal-6.5 {#080808 and 0x10 keep what their prefix says} -body {
+  # #080808 is a hexadecimal colour, 0x10 the number sixteen - a grey
+  # clamped to 1, as it was before the reading.
+  list [::tclpdf::color parse #080808] [::tclpdf::color parse black] \
+      [::tclpdf::color parse 0x10]
+} -result {{gray 0.03137254901960784} {gray 0.0} {gray 1}}
+
+test decimal-6.6 {a leading zero makes a grey only of what is a number} -body {
+  # "08x" is no number in decimal either: an unknown colour, as before the
+  # reading - not a refused component (measured 2026-11-07: it was
+  # TCLPDF COLOUR COMPONENTS number in the first version of the reading).
+  lmap spec {08x 0x -08y 08} {
+    if {[catch {::tclpdf::color parse $spec} result options]} {
+      dict get $options -errorcode
+    } else {
+      set result
+    }
+  }
+} -result {{TCLPDF COLOUR UNKNOWN 08x} {TCLPDF COLOUR UNKNOWN 0x} {TCLPDF COLOUR UNKNOWN -08y} {gray 1}}
 
 cleanupTests

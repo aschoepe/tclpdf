@@ -49,6 +49,65 @@ proc ::tclpdfTest::readBytes {path} {
   return [::tclpdf::io read $path]
 }
 
+# The bytes of a document made by SCRIPT, which sees the document as $doc.
+# Uncompressed, so a difference shows in the content, and with a fixed
+# creation date and file identifier, so two documents made a second apart
+# are the same file. OPTIONS go to [tclpdf new].
+#
+# Shared by decimal.test and fileDecimal.test, which compare a document
+# written with leading zeros against the same one without them - the two
+# copies stood in those files until 2026-11-07.
+proc ::tclpdfTest::fixedBytes {script {options {}}} {
+  set doc [tclpdf new -compress 0 -unit pt {*}$options]
+  $doc info CreationDate "D:20260101000000+01'00'"
+  [$doc writer] id [string repeat \x01 16]
+  try {
+    $doc page add
+    uplevel 1 [list set doc $doc]
+    uplevel 1 $script
+    set path [scratch fixedBytes-[pid].pdf]
+    $doc write $path
+    set result [readBytes $path]
+    file delete $path
+  } finally {
+    $doc destroy
+  }
+  return $result
+}
+
+# Whether the two scripts write the same file. "same" when they do, and
+# otherwise the first line of the file where they part - which is what a
+# failure has to show.
+proc ::tclpdfTest::sameBytes {leading plain {options {}}} {
+  set a [uplevel 1 [list ::tclpdfTest::fixedBytes $leading $options]]
+  set b [uplevel 1 [list ::tclpdfTest::fixedBytes $plain $options]]
+  if {$a eq $b} {
+    return same
+  }
+  foreach x [split $a \n] y [split $b \n] {
+    if {$x ne $y} {
+      return [list differ $x $y]
+    }
+  }
+  return differ
+}
+
+# The eexec cipher, the other way round (Type 1 Font Format, 7.2). type1.tcl
+# reads fonts and so has only [Decrypt]; a test that builds one needs both.
+# Here since 2026-11-07, for font.test and fileDecimal.test.
+proc ::tclpdfTest::type1Encrypt {plain r} {
+  set c1 52845
+  set c2 22719
+  binary scan $plain cu* codes
+  set out {}
+  foreach p $codes {
+    set c [expr {$p ^ ($r >> 8)}]
+    lappend out $c
+    set r [expr {(($c + $r) * $c1 + $c2) & 0xFFFF}]
+  }
+  return [binary format c* $out]
+}
+
 # The content stream of a page, so a test can check which operators were
 # produced rather than only that a file appeared. Reads the buffer, not the
 # written object: the object does not exist until [write] runs.

@@ -37,6 +37,7 @@
 
 package require Tcl 8.6.11-
 package require tclpdf::io 1.0-
+package require tclpdf::pdfObj 1.9-
 
 namespace eval ::tclpdf::sfnt {
   namespace export {[a-z]*}
@@ -929,6 +930,17 @@ proc ::tclpdf::sfnt::CffDict {dict} {
       }
       # A malformed real is not a number, and 0 is the only value that cannot
       # be mistaken for a measurement.
+      #
+      # The nibbles spell a DECIMAL number (TN 5176, Table 5), and an encoder
+      # may write a leading zero - "012" is twelve. Read through [pdfObj
+      # decimal] first: Tcl 8.6 took "012" for octal ten and refused "08" as
+      # no number, which this line then turned into 0. The test is a
+      # [regexp]: the text is built by [append], which gives it Tcl's string
+      # representation, and [string match] against that would convert the
+      # pattern literal [pdfObj num] shares (see [svgPath numbers]).
+      if {[regexp {^-?0[0-9]} $text]} {
+        set text [::tclpdf::pdfObj::decimal $text]
+      }
       lappend operands [expr {[string is double -strict $text] ? $text : 0}]
     } elseif {$byte <= 246} {
       lappend operands [expr {$byte - 139}]
@@ -2435,4 +2447,4 @@ proc ::tclpdf::sfnt::OpenFace {channel path face} {
   return $font
 }
 
-package provide tclpdf::sfnt 1.12
+package provide tclpdf::sfnt 1.13

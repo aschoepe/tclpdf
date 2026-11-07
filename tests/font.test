@@ -3578,21 +3578,6 @@ set type1Base [file join [file dirname [file dirname [file normalize [info scrip
 testConstraint haveType1Base [file exists $type1Base]
 testConstraint havePdftoppm [expr {[auto_execok pdftoppm] ne {}}]
 
-# The eexec cipher, the other way round (Type 1 Font Format, 7.2). type1.tcl
-# reads fonts and so has only [Decrypt]; a test that builds one needs both.
-proc fontEncrypt {plain r} {
-  set c1 52845
-  set c2 22719
-  binary scan $plain cu* codes
-  set out {}
-  foreach p $codes {
-    set c [expr {$p ^ ($r >> 8)}]
-    lappend out $c
-    set r [expr {(($c + $r) * $c1 + $c2) & 0xFFFF}]
-  }
-  return [binary format c* $out]
-}
-
 # Where one CharStrings entry begins and ends: "/name length RD <bytes> ND",
 # walked exactly as [type1 glyphs] walks it - the bytes are encrypted and a
 # run of them will sooner or later spell "/A 5 RD ", so the entries are
@@ -3640,7 +3625,7 @@ proc fontRenamed {how} {
   }
   # The lead-in the format prescribes: four bytes of anything.
   return [fontPfb [dict get $font clear] \
-      [fontEncrypt "tcl!$plain" 55665] [dict get $font trailer]]
+      [::tclpdfTest::type1Encrypt "tcl!$plain" 55665] [dict get $font trailer]]
 }
 
 # The AFM to go with it. A name the program carries and the metrics do not is
