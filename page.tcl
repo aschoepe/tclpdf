@@ -942,7 +942,13 @@ oo::define ::tclpdf::document::document {
   # answer for different options, not because either is a copy. "what" names
   # the call for the refusal ("image place").
   method fitCheck {options what} {
-    set fit [expr {[dict exists $options fit] ? [dict get $options fit] : {}}]
+    # Not a ternary in expr: expr would turn a -fitMode of 010 into 8 under
+    # Tcl 8.6 and a -fit of 0x1A into 26, and the refusal would name what
+    # the caller never wrote.
+    set fit {}
+    if {[dict exists $options fit]} {
+      set fit [dict get $options fit]
+    }
     if {$fit ne {}} {
       if {[catch {llength $fit} count] || $count != 2} {
         return -code error -errorcode [list TCLPDF FIT BOX $fit $what] \
@@ -976,8 +982,10 @@ oo::define ::tclpdf::document::document {
         }
       }
     }
-    set mode [expr {[dict exists $options fitMode] ?
-        [dict get $options fitMode] : {}}]
+    set mode {}
+    if {[dict exists $options fitMode]} {
+      set mode [dict get $options fitMode]
+    }
     if {$mode ne {}} {
       if {$mode ni {contain cover}} {
         return -code error -errorcode [list TCLPDF FIT MODE $mode $what] \

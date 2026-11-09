@@ -555,6 +555,47 @@ test xmp-7.6 {without a Creator the creating tool is the producer, and no empty 
       [regexp {pdf:Keywords} $packet]
 } -result {1 0}
 
+test xmp-7.7 {Keywords 0123 and Creator 007 say the same text in the packet and in /Info} -constraints {haveFace haveTdom} -body {
+  # Both went through an expr ternary on their way into the packet only:
+  # /Info said (0123) and pdf:Keywords said 83 under Tcl 8.6, 123 under 9.0.
+  package require tclpdf::importInfo
+  set answer {}
+  foreach {keywords creator} {0123 007 1.10 0x1A} {
+    set doc [probe $face]
+    $doc info Keywords $keywords
+    $doc info Creator $creator
+    $doc pdfa -part 3 -conformance B
+    set path [::tclpdfTest::scratch xmp-info-digits.pdf]
+    $doc write $path
+    $doc destroy
+    set info [dict get [::tclpdf::pdf info $path] info]
+    set packet [::tclpdf::pdf metadata $path]
+    file delete $path
+    regexp {<pdf:Keywords>([^<]*)</pdf:Keywords>} $packet -> xmpKeywords
+    regexp {<xmp:CreatorTool>([^<]*)</xmp:CreatorTool>} $packet -> xmpCreator
+    lappend answer [list [dict get $info Keywords] $xmpKeywords \
+        [dict get $info Creator] $xmpCreator]
+  }
+  join $answer \n
+} -result {0123 0123 007 007
+1.10 1.10 0x1A 0x1A}
+
+test xmp-7.8 {without a Creator a Producer of 0x1A is the creating tool as written} -constraints {haveFace haveTdom} -body {
+  package require tclpdf::importInfo
+  set doc [probe $face]
+  $doc info Producer 0x1A
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-producer-digits.pdf]
+  $doc write $path
+  $doc destroy
+  set info [dict get [::tclpdf::pdf info $path] info]
+  set packet [::tclpdf::pdf metadata $path]
+  file delete $path
+  regexp {<pdf:Producer>([^<]*)</pdf:Producer>} $packet -> producer
+  regexp {<xmp:CreatorTool>([^<]*)</xmp:CreatorTool>} $packet -> tool
+  list [dict get $info Producer] $producer $tool
+} -result {0x1A 0x1A 0x1A}
+
 # --- what the packet's bytes and the caller's text are ----------------------
 
 test xmp-8.1 {the xpacket begin attribute is the three-byte UTF-8 BOM} -constraints {haveFace haveTdom} -body {

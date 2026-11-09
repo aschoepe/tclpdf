@@ -1461,4 +1461,85 @@ test fieldButton-32.2 {a finite measurement is taken as before} -body {
   set fine
 } -result {0 0 0}
 
+# --- a state name of digits stays the name the caller wrote ----------------
+#
+# The on-state name went through an expr ternary on its way to /V, /DV and
+# /AS, while the appearance dictionary took it as written: an export value of
+# 010 came out as /V /8 /AS /8 beside /AP /N << /010 ... >> - a ticked box
+# with no appearance for its state - and a radio set opened at 01 showed
+# every button off.
+
+# /V, /DV and /AS of one widget or parent, and the names in its /AP /N.
+proc buttonStates {body} {
+  set answer {}
+  foreach key {V DV AS} {
+    if {[regexp "/$key /(\[^ />\\\]\]+)" $body -> value]} {
+      lappend answer $value
+    } else {
+      lappend answer -
+    }
+  }
+  if {[regexp {/N << ([^>]*)>>} $body -> names]} {
+    lappend answer [regexp -all -inline {/[^ /]+} $names]
+  }
+  return $answer
+}
+
+test fieldButton-33.1 {an export value of digits is /V, /DV, /AS and the appearance alike} -body {
+  package require tclpdf::importInfo
+  set answer {}
+  foreach export {01 010 1.10 0x1A} {
+    set doc [buttonDoc]
+    $doc field check box -rect {20 40 5 5} -export $export -checked 1 -default 1
+    set path [buttonFile $doc button-digits.pdf]
+    set states [buttonStates [buttonWidget $doc box]]
+    set field [lindex [::tclpdf::pdf fields $path] 0]
+    lappend answer [list {*}[lrange $states 0 2] [lsort [lindex $states 3]] \
+        [dict get $field value] [dict get $field selected]]
+    file delete $path
+    $doc destroy
+  }
+  join $answer \n
+} -result {01 01 01 {/01 /Off} 01 01
+010 010 010 {/010 /Off} 010 010
+1.10 1.10 1.10 {/1.10 /Off} 1.10 1.10
+0x1A 0x1A 0x1A {/0x1A /Off} 0x1A 0x1A}
+
+test fieldButton-33.2 {an unticked box of export value 010 is Off, and resets to 010} -body {
+  set doc [buttonDoc]
+  $doc field check box -rect {20 40 5 5} -export 010 -default 1
+  set path [buttonFile $doc button-digits-off.pdf]
+  set states [buttonStates [buttonWidget $doc box]]
+  file delete $path
+  $doc destroy
+  lrange $states 0 2
+} -result {Off 010 Off}
+
+test fieldButton-33.3 {a radio set opened at 01 shows button 01 on} -body {
+  package require tclpdf::importInfo
+  set answer {}
+  foreach {value buttons} {
+    01   {{01 {20 40 5 5}} {02 {30 40 5 5}}}
+    010  {{010 {20 40 5 5}} {8 {30 40 5 5}}}
+    1.10 {{1.1 {20 40 5 5}} {1.10 {30 40 5 5}}}
+  } {
+    set doc [buttonDoc]
+    $doc field radio pick -value $value -buttons $buttons
+    set path [buttonFile $doc button-radio-digits.pdf]
+    set row [list [lindex [buttonStates [buttonParent $doc pick]] 0]]
+    foreach kid [buttonKids $doc pick] {
+      set states [buttonStates $kid]
+      lappend row [list [lindex $states 2] [lsort [lindex $states 3]]]
+    }
+    set field [lindex [::tclpdf::pdf fields $path] 0]
+    lappend row [dict get $field value]
+    lappend answer $row
+    file delete $path
+    $doc destroy
+  }
+  join $answer \n
+} -result {01 {01 {/01 /Off}} {Off {/02 /Off}} 01
+010 {010 {/010 /Off}} {Off {/8 /Off}} 010
+1.10 {Off {/1.1 /Off}} {1.10 {/1.10 /Off}} 1.10}
+
 cleanupTests

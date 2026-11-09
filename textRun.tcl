@@ -794,7 +794,12 @@ oo::define ::tclpdf::document::document {
   method TextRunsRecord {given state anchor y rotate shift lift width} {
     set unit [my cget -unit]
     set size [dict get $state size]
-    set url [expr {[dict exists $given url] ? [dict get $given url] : {}}]
+    # Not a ternary in expr: expr would read a URL such as 0123 as a number
+    # (83 under Tcl 8.6) and 1.10 as 1.1.
+    set url {}
+    if {[dict exists $given url]} {
+      set url [dict get $given url]
+    }
     set underline [expr {[dict exists $given underline]
         ? [dict get $given underline] : ($url ne {})}]
     set strike [expr {[dict exists $given strike] ? [dict get $given strike] : 0}]
@@ -1126,4 +1131,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textRun 1.3
+package provide tclpdf::textRun 1.4

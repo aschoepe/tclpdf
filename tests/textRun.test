@@ -511,6 +511,34 @@ test textRun-7.8 {a link in a rotated block, an empty url and a non-boolean unde
   set codes
 } -result {{URL rotate} {URL empty} {underline maybe}}
 
+test textRun-7.10 {a link address of digits reaches /URI as written, from each notation and a table cell} -body {
+  # The address went through an expr ternary on its way to the annotation:
+  # /URI (83) for 0123 under Tcl 8.6, (123) under 9.0, and 1.10 as 1.1.
+  set answer {}
+  foreach url {0123 007 1.10} {
+    set doc [tclpdf new -unit mm -compress 0]
+    $doc page add
+    $doc font -family helvetica -size 10 -style {}
+    set y 30
+    $doc text [list "a" [list url $url]] -at [list 20 $y] -width 60 -runs 1
+    $doc text "<a href=\"$url\">b</a>" -at [list 20 [incr y 10]] -width 60 \
+        -markup tags
+    $doc text "\[c\]($url)" -at [list 20 [incr y 10]] -width 60 \
+        -markup markdown
+    $doc table -at [list 20 [incr y 10]] -width 60 -theme plain \
+        -body [list [list [list runs [list d [list url $url]]]]]
+    set path [::tclpdfTest::scratch textrun-7-10.pdf]
+    $doc write $path
+    $doc destroy
+    set uris [regexp -all -inline {/URI \(([^)]*)\)} [::tclpdfTest::readBytes $path]]
+    file delete $path
+    lappend answer [lmap {whole uri} $uris {set uri}]
+  }
+  join $answer \n
+} -result {0123 0123 0123 0123
+007 007 007 007
+1.10 1.10 1.10 1.10}
+
 test textRun-7.9 {a rotated underline turns with its line} -body {
   set doc [::tclpdfTest::runDoc]
   $doc text [list "cd" {underline 1}] -at {20 30} -width 60 -runs 1 -rotate 30

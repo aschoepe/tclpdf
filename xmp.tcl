@@ -683,8 +683,17 @@ proc ::tclpdf::xmp::packet {descriptions info raw {seconds {}}} {
   # names one, and this package when it does not - CreatorTool used to carry
   # the producer in both cases, so a document with "info Creator" set said
   # two different things about itself.
-  set creator [expr {[dict exists $info creator] ? [dict get $info creator] : {}}]
-  set keywords [expr {[dict exists $info keywords] ? [dict get $info keywords] : {}}]
+  # Not a ternary in expr: expr would read a text such as 0123 as a number
+  # (83 under Tcl 8.6) and the packet would contradict the Info dictionary.
+  # The same holds for the CreatorTool below.
+  set creator {}
+  if {[dict exists $info creator]} {
+    set creator [dict get $info creator]
+  }
+  set keywords {}
+  if {[dict exists $info keywords]} {
+    set keywords [dict get $info keywords]
+  }
   set language [expr {[dict exists $info language] ? [dict get $info language] : {}}]
   # The moment is HANDED IN by the caller, who shares it with the Info
   # dictionary's CreationDate - two clock reads here and there could straddle
@@ -840,7 +849,12 @@ proc ::tclpdf::xmp::packet {descriptions info raw {seconds {}}} {
     # Without a Producer - "info Producer {}" removes the key - there is no
     # tool to name, and an empty element would name one that is empty.
     if {$creator ne {} || $producer ne {}} {
-      Tag_xmp:CreatorTool { Text [expr {$creator ne {} ? $creator : $producer}] }
+      if {$creator ne {}} {
+        set tool $creator
+      } else {
+        set tool $producer
+      }
+      Tag_xmp:CreatorTool { Text $tool }
     }
   }
   Describe $rdf pdf [dict get $namespaces pdf] {
@@ -1168,4 +1182,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::xmp 1.7
+package provide tclpdf::xmp 1.8

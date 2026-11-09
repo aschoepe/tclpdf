@@ -711,6 +711,52 @@ test page-fitcheck-12.7 {the words that do not move the corner stand beside -rot
   set out
 } -result {0 0 0}
 
+test page-fitcheck-12.11 {the refusal of -fit and -fitMode names the value as written} -body {
+  # Both values went through an expr ternary before the refusal quoted them:
+  # -fitMode 010 was refused as "8" under Tcl 8.6, 0x1A as "26" and 1.10 as
+  # "1.1". A -fit of 010 is read in decimal by the call before anything
+  # checks it (option decimals), so that one is named as 10 on purpose.
+  set doc [tclpdf new -unit mm]
+  $doc page add
+  set svg {<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="5" height="5"/></svg>}
+  $doc form create f -size {10 10} -script {}
+  set out {}
+  foreach call {svg {form place}} {
+    foreach {option value} {
+      -fit 0x1A -fit 1.10 -fit 1e3 -fit 010
+      -fitMode 010 -fitMode 0x1A -fitMode 1.10
+    } {
+      set extra {}
+      if {$option eq "-fitMode"} {
+        set extra {-fit {40 40}}
+      }
+      if {$call eq "svg"} {
+        set script {$doc svg -data $svg -at {20 20} {*}$extra $option $value}
+      } else {
+        set script {$doc form place f -at {20 20} {*}$extra $option $value}
+      }
+      catch $script message opts
+      regexp {not "([^"]*)"} $message -> quoted
+      lappend out [list $quoted [lindex [dict get $opts -errorcode] 3]]
+    }
+  }
+  $doc destroy
+  join $out \n
+} -result {0x1A 0x1A
+1.10 1.10
+1e3 1e3
+10 10
+010 010
+0x1A 0x1A
+1.10 1.10
+0x1A 0x1A
+1.10 1.10
+1e3 1e3
+10 10
+010 010
+0x1A 0x1A
+1.10 1.10}
+
 test page-rotate-9.1 {a rotation that is not a number is named} -body {
   # Asked BEFORE the modulo, which is where an empty string used to die as
   # "can't use empty string as operand of %" - a raw Tcl error where this

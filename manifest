@@ -1,5 +1,5 @@
-C Keep\sfield\snames,\sexport\svalues\sand\soptions\sas\stext\sin\spdf\sfields\n\n-\simportInfo:\sa\sfield\sname,\sthe\sselected\sstate\sof\sa\scheck\sbox\sor\sradio\sbutton\sand\sboth\shalves\sof\san\s/Opt\sentry\sno\slonger\spass\sthrough\san\sexpr\sternary\s-\sa\sname\sof\sdigits\ssuch\sas\s01\sor\s010\sand\sa\sname\ssuch\sas\s1.10\scome\sback\sas\swritten\n-\sxml:\san\sentity\svalue\sin\sthe\samplification\sguard\sis\staken\sas\swritten\sthe\ssame\sway\n-\stests:\simportFields-33.1\sto\s33.4,\ssvg-r8-75.4
-D 2026-11-09T08:06:05.010
+C Keep\sexport\svalues,\slink\saddresses,\sXMP\stexts\sand\sfont\saliases\sas\stext\n\n-\sfieldButton:\sthe\sexport\svalue\sof\sa\scheck\sbox\sand\sthe\schosen\svalue\sof\sa\sradio\sgroup\sno\slonger\spass\sthrough\san\sexpr\sternary\s-\s/V,\s/DV,\s/AS\sand\sthe\sappearance\sstate\sagree\sfor\sa\svalue\sof\sdigits\ssuch\sas\s01\sor\s010\n-\stextRun:\sa\slink\saddress\sof\sdigits\sreaches\s/URI\sas\swritten,\sfrom\sruns,\stags,\sMarkdown\sand\stable\scells\n-\sxmp:\sKeywords,\sCreator\sand\sthe\screating\stool\ssay\sthe\ssame\stext\sas\sthe\sInfo\sdictionary\n-\sfield:\sa\sface\sembedded\sunder\san\salias\sof\sdigits\sis\sembedded\swhole\sfor\sa\sfillable\sfield\n-\spage:\sthe\srefusal\sof\s-fit\sand\s-fitMode\snames\sthe\svalue\sas\sthe\scaller\swrote\sit\n-\stests:\sfieldButton-33.1\sto\s33.3,\stextRun-7.10,\sxmp-7.7\sand\s7.8,\sfield-8.12,\spage-fitcheck-12.11\n-\stextRun\s1.4,\sxmp\s1.8
+D 2026-11-09T18:46:51.601
 F Makefile.in d91f5766c7267c53141b153feddddf9197a5bf92cdf5ab10a12126ba0e1fc13d
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -308,8 +308,8 @@ F examples/assets/xml/order-x-comfort.xml dfe8633e2a2a3d76f68fdced6e925a8a2314d1
 F examples/assets/xml/zugferd-en16931.xml 53e2b6f8ac1759ab26e77f42e7d4262cf3ee333afee47581d2248efebc1aae40
 F examples/assets/xml/zugferd-minimum.xml c8acc70758fdbbcee9f3446b8ca4df9f2561242a46a6cd3cab62ee7f26466476
 F examples/common.tcl 26ce0b089b7629eb0e14ba0ce80c9d54bf0af9f018be7d1d96fef4415455e24f
-F field.tcl 18f9e9bc07021584e1cec5e0651e65f7271ae29480669c26cd40b3b8aed82c53
-F fieldButton.tcl ef82bd285730889216c1e3698b5d104fda1ef9d0f3ed77767db78abd93791b41
+F field.tcl ebc542b2dca4984d6dd3cf4fc301068211de7c750f74a8644f0d0cbe5872c8b2
+F fieldButton.tcl 440720ccf8f364388755a312fa96eaaef7cb5ac47deb62ba5c33509bc07d72fd
 F fieldChoice.tcl 90b3f0b8f2488e3ec69135ac5b6f34ab0ef4e30302ed9dcfb359025ad4feb4a7
 F fieldText.tcl fbe0a2302ff9571c83cdfff530fc96e84df0dbda98b19f08fe252dd17b2f7990
 F filter.tcl dcd7ca413a832e7cf0b2effa5cc8cfdb45b9169a82beebee9b3986f0594a649e
@@ -358,14 +358,14 @@ F option.tcl ec8216ed3adf0c6eb2e853e65eed5cef8194976295aa89e0ee2f8850c1d1e01b
 F otLayout.tcl 8bb55cb2adcd4dc8e039e17cf4e22e038d62191e29371fefa1c64c1991ce0aeb
 F outline.tcl d3ba4f7ab32078cda6267c0b6bd1f1009e3c765f29b9ea854c59e5b29c504cb0
 F output.tcl ea63eb57092f6acfd5a8a408c52e747afd9692f09fb121cb6739f8968f138f17
-F page.tcl 52ad4b84e7d4fc61d15ff459fb18111431bfccc218eb4e4425823385db85799d
+F page.tcl 07876474cd1aeeb6827fa59c01527073f55c90008400e5246658f77f68ba9978
 F pageLabel.tcl fa470a3e9d7926717fe46c846b223bf35c7bb17c52b7284c144f622c2b1e2934
 F pageNumber.tcl d8b3fd3d6b944d17c3af8f6cba7b1e5b37f0acc8bcf22e86f26ebc29579feba7
 F pattern.tcl ff3122343995d0403d5227c27f2f6533a3aae71e4a3a4b36cd73624efd3643d9
 F pdfFunction.tcl db7bc175846afc7d36aa2663151c5d66e0fe8ccc01d6e966064e33917414d70d
 F pdfObj.tcl 043bc27cab0378c863bafe382cbb81dbbc4c979ea7a5575b0c7321e679f5c124
 F pdfa.tcl 9017916033a88a1edceacbabf21ab9c95d1493459014c2961d8cf844e76770e1
-F pkgIndex.tcl.in f95882dd27439ef2e40a21da2611a842b03ac7f715d635b86a3ef49b12549a7e
+F pkgIndex.tcl.in cc4d091658405a62309c2384562ab0cd6b09ac68bcc831a21fb55d3604c9d97e
 F sbix.tcl 79af5fd7e5d26953f740b2477893c42cc8beb98ebc5b9aa71396f69fb835480c
 F sfnt.tcl 94fd7a8b5ab003d0a4322f91913585e559e9fd2fd6b718e5fc58ee8750d8c8a4
 F shading.tcl aad03244e4cfd880e55f6e806ad98ef174baadaa0eacc9ac0f024b2c3d8fd22d
@@ -414,8 +414,8 @@ F tests/document.test 94aac1d6eadbacf327fe4dcd736dc6244352c286bd0252c7ca22e2e311
 F tests/encrypt.test 2678e5a011b2d2bdcc8e9d9a46975af3e28c2177f07dd92785f0ef6c57a713d1
 F tests/errorcode.test c173f07b17910a3b47b5b3ff79c2f7bcf6fbada58a498626d938fd6f17aa7ba9
 F tests/event.test 4f2421ec504f22faeceab45e576fe65165a87be7753503e98fac6800ce3384d3
-F tests/field.test cb5f590aae00b47b24803a90477c1afdbd9942b942bd0d86efd370b75e44b9cd
-F tests/fieldButton.test 60e4be0b537f15128cdabe222d2349c4a20360e9a3abf2cbcaa2d6355cf10561
+F tests/field.test dc1d2899e080d7ee9ed9f0c359ca14fa33be19eb26624c71e1103ff6a58fcd75
+F tests/fieldButton.test 8bb12e723c036ce3703294e1cde27b990c67cb84e27f706bb235ec35d3efe396
 F tests/fieldChoice.test d89c5560e13f9a80031c6b82f0439629516cab730f619395f1dd3acb34022190
 F tests/fieldText.test 740f30236c9e2769e5f046e5cd2fa6d16a55419f037337700aec2f463ed96f27
 F tests/fileDecimal.test ad1c17afee24cf8a8c261e6859624c9fc15020ca6a283d8887a9d028a30a9ebf
@@ -454,7 +454,7 @@ F tests/notoemoji.test 1c995040ab5c149a6b81dc73387740b50852e71c8370b23987a1e375b
 F tests/option.test ee5e167a604a09aa4fe0b762d90e8cd2e3666733dd6b5f2e2908583cbd2e7b6a
 F tests/order-x.xml 4a27fb6a9c8c5bae67471aa9b4846767ca07774a114f405aa9589e20f208767a
 F tests/outline.test 9225672a6e1c99dc59a3ad05c4309e9c34c8fc6ce1529704b8af3b5b77e5c1c7
-F tests/page.test c25e0356eaff9637d7a923d162ced41b354098cf00c30feddb465517027ad1b0
+F tests/page.test e44b02da28cb9dfce94c5814f304fa65cf3e02f52305306734d6c624c06c48e6
 F tests/pageLabel.test 2e22d3e01c40673d5038e576f0ba0c9fa3c70a1c466f573b32439535f04c3275
 F tests/pageNumber.test f0f0678a2232c59a3f94b0699b7ef4762b051aa1587e8240c1ebcc27bcc1ed0a
 F tests/pdfFunction.test 29ea29b867a39fea22df9d18deca2c3da83190520a66b7a2218fa5ae45d3ca21
@@ -475,7 +475,7 @@ F tests/table.test 191ed38722067c37bcce0862722d6360da693ce9852b11b28c5248e8c1ec8
 F tests/text.test 48a08bbc690c666ba1f676caecfcec366c20af891a0c0f8be44e022a75498e0b
 F tests/textFlow.test b1a67e17cb618eb8cc2908766363c68fc130469c010ee71f051032edb7f713b2
 F tests/textPath.test d52bd06f46b3551b59442bc43cfff9b64c8f8901e49467c42bb8c10357dd9c5c
-F tests/textRun.test 225ec839e6a51b1fbad4e460eb5d8cc29d4d7363e7f2e7666db1c1a77071c7ea
+F tests/textRun.test 463ca1a20e1e3437ead667928fecdaec988215e2bb5df4aa5b1cda9289bc560b
 F tests/timestamp.test f8a4bc3e264715dc14cd944c5e85d5f75673c87acf160201a7f08ca849f31937
 F tests/tkcanvas.test fe55f5dc8f5a52fff8d36ae2b13bf6059ff13b290f825a84578502815beec090
 F tests/type1.test 8b4b5a67ad3d6606a0584c26b38e3d479e13762a6bb09c3478e1ccf313888079
@@ -487,13 +487,13 @@ F tests/version.test 9a26b59c8ebb13ea4c82f6b3b0cd902c5a6a70eb6218f341b5c21024fd3
 F tests/viewerPreferences.test 2e4f7881daff2f1e093b676c9b25669b8636328b50b6683f0b9830771e0cd608
 F tests/writer.test 5858be47dbd0a986000abfbe874e6768ba84eba22b2bd9c1e10e2f074b387989
 F tests/xObject.test a2fa0202373d8817935d193637d74445031f24bfb87cf3908b7a3f337e5950a0
-F tests/xmp.test ff2a2d9fcfad1043e5466d241f1a54ef70acc694fd9c639cc1f270a933baa4e3
+F tests/xmp.test 832b6027c482b1a83dd9cbb843aee5877b4bf448d99513a69b964748b633b2ef
 F tests/zugferd.test 8b9e0cd5fe2b510cbc91a70f39081b63e38b7f1cf10b15f44866fd9238280ad4
 F text.tcl f58164a5f93d0e9c28e7d05f27a0bf551d42c54266420517934097dcfaaa904c
 F textAvoid.tcl 1bbb96cb2a679d0f926f42e0103aea52866eec3b7f3920e15de827cb5e223f83
 F textBlock.tcl 25420c853a6e2053e2d8ee3f93edefc8725c84291b7e9d4bbd6b59aaa3d9ba55
 F textPath.tcl d8013365a76aa6de733a24281bf756f6057869fe54e7031ef938376a581b3394
-F textRun.tcl 7eca0708829c7421add71760a9b11b2d38960f2176955116ec09860df2bc1fd7
+F textRun.tcl 03e1c80d6e8a92feec39c043615471ea08cb89b2d40c705b60f518d7dbbf92d2
 F timestamp.tcl d42cc2e403b3a241c937d38d5eef51a2d91a29eb8a143b982a445b305b901dee
 F tools/BUILD-PACKAGE.md c2fc635c2f36b43431f34a499a8bd05a707a1257710e0cc04ffbcef008c18910
 F tools/agl/glyphlist.txt 3f2e0ba5f427ed0ccbae9b0f57ea7ffbc4503fc7cb25da42e21034358b1ae621
@@ -522,10 +522,10 @@ F viewerPreferences.tcl afdc8f5f88e46c8d790310d5f5b24468725804d421883a9260c8fb5b
 F writer.tcl 8811bb2b6cb9e4742c6bf5a713089017e8778fa41356537a7b0787ad35b18835
 F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
 F xml.tcl daff381087dc14bc32df6608997d270ea3daa2d1523566beb3616f3f5a8a8d41
-F xmp.tcl 06650fcfafd13f8e1391b6e6df2a85e5cacec39459fdec1f8ff7edb7076b72ba
+F xmp.tcl 9c5e5301ec72953c3067176bb46d984af1a52c1a7f53cff87d07f843d79fded1
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P aa578edf0967ccdf827758e742a4cc38da4e4d5fc53ab1ef7f3c0df35fdffa59
-R d87702c812c1b25800fb9b1203827ba7
+P 48baf77b81d3b89ef8e816331ffc9b220911b46d7cf0a3a577f58f64b56bc2f2
+R d8942822c90af74320a7996f90f5a9cd
 U alex
-Z 55ccd8d7ae897b4d2e23be19a6377f47
+Z 5d1c89b812df3843193e5e924c481503
 # Remove this line to create a well-formed Fossil manifest.

@@ -1869,5 +1869,21 @@ test field-8.11 {a label that already drew keeps its element, and says so} -cons
   list $refused $before $after
 } -result {1 0 2}
 
+test field-8.12 {a face embedded under an alias of digits is embedded whole for a fillable field} -constraints haveFieldFace -body {
+  # The alias went through an expr ternary on its way to the field: 010
+  # came out as 8 (10 under Tcl 9, and 08 as 8 there), named no face, and
+  # the face of a field someone types into stayed a subset of abc.
+  set answers {}
+  foreach alias {010 0123 08 1.10} {
+    set doc [fieldDoc]
+    $doc font embed $alias $::fieldFace
+    $doc field text t -rect {20 40 80 8} -value abc -family $alias
+    set data [fieldBytes $doc field-8-12.pdf]
+    $doc destroy
+    lappend answers $alias [expr {[regexp {/BaseFont /[A-Z]{6}\+DejaVuSans} $data] ? "subset" : "whole"}]
+  }
+  set answers
+} -result {010 whole 0123 whole 08 whole 1.10 whole}
+
 
 cleanupTests

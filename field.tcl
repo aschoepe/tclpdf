@@ -1937,11 +1937,18 @@ oo::define ::tclpdf::document::document {
     # call before the write happened to say so - measured 2026-08-23 on the
     # example. So the values are settled HERE, at the declaration, and
     # travel with the field.
+    # Not a ternary in expr: expr would read an alias such as 010 as a number
+    # (8 under Tcl 8.6), which names no font, and the field's font would stay
+    # a subset.
+    set alias {}
+    if {[my TextEmbedded $resolved]} {
+      set alias $resolved
+    }
     return [dict create \
         da "[my TextResource $resolved] [::tclpdf::pdfObj num $size] Tf\
             [::tclpdf::color operator $parsed fill]" \
         family $family style $style size $size colour $colour \
-        alias [expr {[my TextEmbedded $resolved] ? $resolved : {}}]]
+        alias $alias]
   }
 
   # -- the measurements a field option carries ------------------------------

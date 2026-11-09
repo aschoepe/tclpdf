@@ -170,7 +170,19 @@ oo::define ::tclpdf::document::document {
             reset action of ISO 32000-2, 12.7.6.3 puts the box back into -\
             not \"$default\". Leave it out for a box that has no /DV"
       }
-      set default [expr {$default ? $export : $::tclpdf::fieldButton::off}]
+      # Not a ternary in expr: expr would read an export value such as 010
+      # as a number (8 under Tcl 8.6) and 1.10 as 1.1. The same holds below
+      # wherever a branch carries the name of a state.
+      if {$default} {
+        set default $export
+      } else {
+        set default $::tclpdf::fieldButton::off
+      }
+    }
+    if {[dict get $options checked]} {
+      set state $export
+    } else {
+      set state $::tclpdf::fieldButton::off
     }
 
     my FieldDeclare $name -type Btn -build FieldCheckBuild \
@@ -180,9 +192,7 @@ oo::define ::tclpdf::document::document {
         -label [dict get $options label] \
         -flags [::tclpdf::field flags [my FieldButtonFlagNames $options {}]] \
         -data [dict merge $options [dict create \
-            export $export default $default \
-            state [expr {[dict get $options checked]
-                ? $export : $::tclpdf::fieldButton::off}]]]
+            export $export default $default state $state]]
     return $name
   }
 
@@ -390,6 +400,11 @@ oo::define ::tclpdf::document::document {
       my RequireVersion 1.5 "the RadiosInUnison flag of a radio button field"
     }
 
+    if {[dict get $options value] eq {}} {
+      set state $::tclpdf::fieldButton::off
+    } else {
+      set state [dict get $options value]
+    }
     set flagNames [my FieldButtonFlagNames $options Radio]
     if {[dict get $options notoggle]} {
       lappend flagNames NoToggleToOff
@@ -418,9 +433,7 @@ oo::define ::tclpdf::document::document {
         -tooltip [dict get $options tooltip] \
         -flags [::tclpdf::field flags $flagNames] \
         -data [dict merge $options [dict create \
-            buttons $checked \
-            state [expr {[dict get $options value] eq {}
-                ? $::tclpdf::fieldButton::off : [dict get $options value]}]]]
+            buttons $checked state $state]]
     return $name
   }
 
@@ -541,8 +554,11 @@ oo::define ::tclpdf::document::document {
     set value [dict get $record entry value]
     # /AS says which appearance THIS button shows, and only the one whose
     # on-state name is the set's /V shows it (12.7.5.2.4).
-    set state [expr {$value eq [dict get $data state]
-        ? $value : $::tclpdf::fieldButton::off}]
+    if {$value eq [dict get $data state]} {
+      set state $value
+    } else {
+      set state $::tclpdf::fieldButton::off
+    }
     set pairs [list AS [::tclpdf::pdfObj name $state]]
     lappend pairs {*}[my FieldButtonCharacteristics $data]
     # The slot is the button's index, so two buttons of one set never reserve
