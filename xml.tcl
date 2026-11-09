@@ -131,7 +131,12 @@ proc ::tclpdf::xml::Amplification {text} {
   set definitions [dict create]
   foreach {-> name double single} [regexp -all -inline \
       {<!ENTITY\s+([^\s%>]+)\s+(?:"([^"]*)"|'([^']*)')\s*>} $subset] {
-    dict set definitions $name [expr {$double ne {} ? $double : $single}]
+    # Not a ternary in expr: it would hand back a value such as 010 as 8.
+    if {$double ne {}} {
+      dict set definitions $name $double
+    } else {
+      dict set definitions $name $single
+    }
   }
   if {![dict size $definitions]} {
     return

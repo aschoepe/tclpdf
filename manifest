@@ -1,5 +1,5 @@
-C Pin\sthe\sDocMDP\srefusal\sfor\sa\s/P\swritten\swith\sa\sleading\szero\n\n-\stests:\simportDecimal-9.1\s-\sa\sfile\scertified\swith\s/P\s01\sis\srefused\sby\ssign\sadd\sas\s/P\s1\sis,\sand\s/P\s02\stakes\sa\sfurther\ssignature
-D 2026-11-09T07:51:00.393
+C Keep\sfield\snames,\sexport\svalues\sand\soptions\sas\stext\sin\spdf\sfields\n\n-\simportInfo:\sa\sfield\sname,\sthe\sselected\sstate\sof\sa\scheck\sbox\sor\sradio\sbutton\sand\sboth\shalves\sof\san\s/Opt\sentry\sno\slonger\spass\sthrough\san\sexpr\sternary\s-\sa\sname\sof\sdigits\ssuch\sas\s01\sor\s010\sand\sa\sname\ssuch\sas\s1.10\scome\sback\sas\swritten\n-\sxml:\san\sentity\svalue\sin\sthe\samplification\sguard\sis\staken\sas\swritten\sthe\ssame\sway\n-\stests:\simportFields-33.1\sto\s33.4,\ssvg-r8-75.4
+D 2026-11-09T08:06:05.010
 F Makefile.in d91f5766c7267c53141b153feddddf9197a5bf92cdf5ab10a12126ba0e1fc13d
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -338,7 +338,7 @@ F imagePngAlpha.tcl 2569f865e26f3b2c08a0ddffdbda11cccfcc417a6639224a38a956a45a28
 F imageTiff.tcl 9486a21c0e6d36bae57899d5d697cc486ae5bee167579b74802d7ffa9f625f09
 F imageTiffStreams.tcl 7585e501979a12a4b89cf53775be35767e7230327494cf94cee71c84ef6dd12d
 F import.tcl 297e51def4b19b2aeb211861fcf1f17c81336260ae814ea93ddcee8890ef4f97
-F importInfo.tcl e550a7e9028deb0b7903ed6e53f4a0bbb5373eb78bdf1ec6e2a2c4d8e4cdc7a5
+F importInfo.tcl b8f855c459bc10ca5da785938e46cf9747666e52abf84657f89176fb1b82e974
 F importRead.tcl e90c1388195f3b09cfee11e5b85f88311a1620de765f735eba34ad6b1d00b6b0
 F io.tcl 1cae87ceaaaea78408922a03ea342d7f1bc40073021e8c77ff0178d7e8945882
 F joining.tcl dc3b951a953ca221e6ca9098e5c1fa9f98a0bde39414b1bfc3fb5887326c7371
@@ -437,7 +437,7 @@ F tests/imageTiff.test 604ce332f35891bdafdc46e252585cd28a032f56b4c71994ced98f071
 F tests/imageTiffStreams.test 22c06c95311e7c4f6d8b742bd595f0943ad04135fcb236fa2bcb1861d2ccd8a2
 F tests/import.test e8e52a88ea410c6354b8093bfca1269983d2e959648cd8b1c368d7f4965f5600
 F tests/importDecimal.test 63cd176982758242e0b50babbf3062091afb3e1d8c6d85301c61184fba045b8b
-F tests/importFields.test da84a5ba0c03ec243391f79a48ae519080f8fa79b6a3a78e3c33b48589f62fb6
+F tests/importFields.test a71cde2e7350a870f6759927b435c1add3e1a30b5a894f980d6f5c57fcd083e8
 F tests/importLayer.test 33dff30aace8efa86b31882732e781990fbfda67adb1ffd8ed3cd408f5258a6b
 F tests/io.test 67d604b30207db8b11d791d8d2fa7d27c1f0ebee02d8221265c36b2106a71621
 F tests/joining.test 9ba3834dcf0dce5d3c025084ed9d88df24b00e4f85e59bca4c7cadb1ba84f276
@@ -469,7 +469,7 @@ F tests/shaping.test 2782df5ad77b4d09adaa5ce270cb511b84b2f42702daed2e31517f4e845
 F tests/sign.test 8be70999a5229cd06a4f52853465d35bb4554c26e7777651c498a84eacbdcd48
 F tests/structure.test d7467020023eecec7f821f3bf337161ef8ba592a93a98a07cc3094dfad2fa70a
 F tests/subset.test c7dde96f5d7cc81fdf992519335c2e6cb9059e0d1cad867fac7583e27226721b
-F tests/svg.test b706ca671124371af1083079c38de7a9d97fc03f5163743312af7d63dc0e7cff
+F tests/svg.test b3b404c259d7d358206f8122b7f0ba557342385ffad37b1a8c1dfb2aaae56df7
 F tests/svgClip.test 9b371c204d320710241d043ee4b6507f7b4009de2d6185087516376f2a88dfc5
 F tests/table.test 191ed38722067c37bcce0862722d6360da693ce9852b11b28c5248e8c1ec8c41
 F tests/text.test 48a08bbc690c666ba1f676caecfcec366c20af891a0c0f8be44e022a75498e0b
@@ -521,11 +521,11 @@ F varFont.tcl 82f177b61927223d6902a4a00870ea5ccbd2015e50a10518fedf67b762e8f588
 F viewerPreferences.tcl afdc8f5f88e46c8d790310d5f5b24468725804d421883a9260c8fb5bd02a0c98
 F writer.tcl 8811bb2b6cb9e4742c6bf5a713089017e8778fa41356537a7b0787ad35b18835
 F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
-F xml.tcl 4e9e1dce2946e22d16a2814148f8c482daead21235f916059d13b880a6f73b08
+F xml.tcl daff381087dc14bc32df6608997d270ea3daa2d1523566beb3616f3f5a8a8d41
 F xmp.tcl 06650fcfafd13f8e1391b6e6df2a85e5cacec39459fdec1f8ff7edb7076b72ba
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 9fd8236a607900a2c93645add4d66f382b0a48f0e709ae6139c1cfe1655af58b
-R 8e299b734e3b8904485ea9d82db75651
+P aa578edf0967ccdf827758e742a4cc38da4e4d5fc53ab1ef7f3c0df35fdffa59
+R d87702c812c1b25800fb9b1203827ba7
 U alex
-Z 3b939bdc03b2594de6f303459cce9128
+Z 55ccd8d7ae897b4d2e23be19a6377f47
 # Remove this line to create a well-formed Fossil manifest.

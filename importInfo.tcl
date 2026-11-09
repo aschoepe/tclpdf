@@ -872,7 +872,14 @@ proc ::tclpdf::pdf::FieldWalk {readerVar array inherited prefix stateVar} {
     set partial [Text [Resolve reader [Get $field T]]]
     set name $prefix
     if {[Get $field T] ne {}} {
-      set name [expr {$prefix eq {} ? $partial : "$prefix.$partial"}]
+      # Not a ternary in expr: expr would read a name such as 010 as a number
+      # (8 under Tcl 8.6) and 1.10 as 1.1. The same holds below wherever a
+      # branch carries text from the file.
+      if {$prefix eq {}} {
+        set name $partial
+      } else {
+        set name $prefix.$partial
+      }
       dict lappend state nodes [dict create item $item object $object \
           field $field name $name partial $partial inherited $carried]
     }
@@ -1044,8 +1051,11 @@ proc ::tclpdf::pdf::FieldOptions {readerVar field} {
     if {[lindex $entry 0] eq "a"} {
       set pair [lindex $entry 1]
       set export [Text [Resolve reader [lindex $pair 0]]]
-      set display [expr {[llength $pair] > 1
-          ? [Text [Resolve reader [lindex $pair 1]]] : $export}]
+      if {[llength $pair] > 1} {
+        set display [Text [Resolve reader [lindex $pair 1]]]
+      } else {
+        set display $export
+      }
       lappend out [list $export $display]
     } else {
       set text [Text $entry]
@@ -1077,7 +1087,10 @@ proc ::tclpdf::pdf::FieldSelected {readerVar field type value options} {
   upvar 1 $readerVar reader
   switch -- $type {
     check - radio {
-      return [expr {$value eq {} || $value eq "Off" ? {} : [list $value]}]
+      if {$value eq {} || $value eq "Off"} {
+        return {}
+      }
+      return [list $value]
     }
     listbox - combo {}
     default {return {}}

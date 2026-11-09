@@ -2702,6 +2702,33 @@ test svg-r8-75.3 {an entity defined in terms of itself is a cycle} -body {
   set code
 } -result {TCLPDF XML ENTITY cycle}
 
+test svg-r8-75.4 {an entity of digits is counted at the length it is written} -setup {
+  # The guard read each definition through a ternary in [expr], which handed
+  # "0000000010" back as 8 (Tcl 8.6) or 10 (9.0) and so counted one or two
+  # characters for ten. The two limits are lowered here so that a document
+  # small enough to read shows it: twenty references of ten characters each
+  # are 200 against a budget of one times the document's own length.
+  set savedTdom $::tclpdf::xml::haveTdom
+  set savedFloor $::tclpdf::xml::amplificationFloor
+  set savedLimit $::tclpdf::xml::amplificationLimit
+  set ::tclpdf::xml::haveTdom 0
+  set ::tclpdf::xml::amplificationFloor 0
+  set ::tclpdf::xml::amplificationLimit 1
+} -body {
+  set answer {}
+  # The letters are the reference: the same length, never a number.
+  foreach literal {0000000010 aaaaaaaaaa} {
+    set markup "<!DOCTYPE a \[<!ENTITY z \"$literal\">\]><a>[string repeat {&z;} 20]</a>"
+    lappend answer [::tclpdfTest::refusalCode {::tclpdf::xml parse $markup}]
+  }
+  set answer
+} -cleanup {
+  set ::tclpdf::xml::haveTdom $savedTdom
+  set ::tclpdf::xml::amplificationFloor $savedFloor
+  set ::tclpdf::xml::amplificationLimit $savedLimit
+  unset -nocomplain savedTdom savedFloor savedLimit answer literal markup
+} -result {{TCLPDF XML ENTITY expansion} {TCLPDF XML ENTITY expansion}}
+
 test svg-r8-76.1 {a refused drawing leaves the page and the tree as they were} -body {
   # The finding of the codex review: a colour refusal reached the caller with
   # the elements BEFORE it already on the page, and in a tagged document a

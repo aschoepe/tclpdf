@@ -754,5 +754,92 @@ test importFields-32.3 {a file that is not certified says so with the empty stri
     dict get $facts certified
 } -result {}
 
+# --- a field name is text, not a number ------------------------------------
+#
+# The reader joined the partial names, picked the display half of an /Opt
+# entry and answered a check box's export value through a ternary in [expr],
+# and [expr] hands back whatever looks like a number as one: /T (010) came
+# back as 8 under Tcl 8.6 and as 10 under 9.0, /T (01) as 1, a kid (10) under
+# a parent (1) as 1.1. Every name below is one [expr] would have rewritten.
+proc ::tclpdfTest::digitFixture {} {
+    set objects {}
+    lappend objects "<< /Type /Catalog /Pages 2 0 R /AcroForm\
+        << /Fields \[4 0 R 5 0 R 6 0 R 8 0 R 10 0 R 11 0 R\] >> >>"
+    lappend objects "<< /Type /Pages /Kids \[3 0 R\] /Count 1\
+        /MediaBox \[0 0 400 500\] >>"
+    lappend objects "<< /Type /Page /Parent 2 0 R\
+        /Annots \[4 0 R 5 0 R 7 0 R 9 0 R 10 0 R 11 0 R\] >>"
+    lappend objects "<< /Type /Annot /Subtype /Widget /Rect \[10 10 100 30\]\
+        /FT /Tx /T (01) /P 3 0 R >>"
+    lappend objects "<< /Type /Annot /Subtype /Widget /Rect \[10 40 100 60\]\
+        /FT /Tx /T (010) /P 3 0 R >>"
+    lappend objects "<< /FT /Tx /T (007) /Kids \[7 0 R\] >>"
+    lappend objects "<< /Type /Annot /Subtype /Widget /Rect \[10 70 100 90\]\
+        /T (01) /Parent 6 0 R /P 3 0 R >>"
+    lappend objects "<< /FT /Tx /T (1) /Kids \[9 0 R\] >>"
+    lappend objects "<< /Type /Annot /Subtype /Widget /Rect \[10 100 100 120\]\
+        /T (10) /Parent 8 0 R /P 3 0 R >>"
+    # A check box whose on state is the name /01.
+    lappend objects "<< /Type /Annot /Subtype /Widget /Rect \[10 130 20 140\]\
+        /FT /Btn /T (box) /V /01 /AS /01 /P 3 0 R >>"
+    # One option written as a one-element array, one whose display half is
+    # digits: both halves come from the file as text.
+    lappend objects "<< /Type /Annot /Subtype /Widget /Rect \[10 150 100 170\]\
+        /FT /Ch /Ff 131072 /T (pick) /Opt \[ \[(01)\] \[(a) (010)\] \]\
+        /V (01) /P 3 0 R >>"
+    return [::tclpdfTest::buildpdf importfields-digits.pdf $objects]
+}
+
+test importFields-33.1 {a partial name of digits comes back as written} -body {
+    set path [::tclpdfTest::digitFixture]
+    set fields [::tclpdf::pdf fields $path]
+    set answer {}
+    foreach field [lrange $fields 0 1] {
+        lappend answer [list [dict get $field name] [dict get $field partial]]
+    }
+    set answer
+} -cleanup {
+    file delete $path
+} -result {{01 01} {010 010}}
+
+test importFields-33.2 {and so does a fully qualified one joined from digits} -body {
+    set path [::tclpdfTest::digitFixture]
+    set answer {}
+    foreach field [::tclpdf::pdf fields $path] {
+        if {[dict get $field type] eq "text"} {
+            lappend answer [dict get $field name]
+        }
+    }
+    lrange $answer 2 end
+} -cleanup {
+    file delete $path
+} -result {007 007.01 1 1.10}
+
+test importFields-33.3 {a check box's on state /01 is selected as 01} -body {
+    set path [::tclpdfTest::digitFixture]
+    set answer {}
+    foreach field [::tclpdf::pdf fields $path] {
+        if {[dict get $field name] eq "box"} {
+            set answer [list [dict get $field value] [dict get $field selected]]
+        }
+    }
+    set answer
+} -cleanup {
+    file delete $path
+} -result {01 01}
+
+test importFields-33.4 {both halves of an /Opt entry stay text} -body {
+    set path [::tclpdfTest::digitFixture]
+    set answer {}
+    foreach field [::tclpdf::pdf fields $path] {
+        if {[dict get $field name] eq "pick"} {
+            set answer [dict get $field options]
+        }
+    }
+    set answer
+} -cleanup {
+    file delete $path
+} -result {{01 01} {a 010}}
+
 ::tcltest::cleanupTests
 return
