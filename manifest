@@ -1,5 +1,5 @@
-C Replace\sentity\sreferences\swithout\ssubst\sin\sthe\spure\sTcl\sXML\sparser\n\n-\sxml:\sUnescape\sreplaces\seach\sreference\sin\sone\spass\sover\sthe\stext;\sthe\stext\sbetween\sreferences\sis\scopied,\snever\sevaluated,\sso\sa\sbracketed\scommand\sinside\san\sattribute\sor\stext\snode\sno\slonger\sruns\s-\scloses\scommand\sexecution\sfrom\sa\sforeign\sSVG\swhen\stdom\sis\sabsent\n-\sxml:\sthe\sdigits\sof\sa\snumeric\scharacter\sreference\sare\sread\swith\sscan,\sso\sa\sleading\szero\sno\slonger\smakes\sTcl\s8.6\sread\sthem\sas\soctal\n-\stests:\ssvg.test\scovers\sthe\sbracket\scase,\sliteral\sbackslashes\sand\sdollar\ssigns,\snumeric\sreferences\swith\sleading\szeros,\sa\sdouble-escaped\sreference,\sand\sthe\sagreement\sof\sboth\sparsers
-D 2026-11-07T09:45:23.724
+C Pin\sthe\sDocMDP\srefusal\sfor\sa\s/P\swritten\swith\sa\sleading\szero\n\n-\stests:\simportDecimal-9.1\s-\sa\sfile\scertified\swith\s/P\s01\sis\srefused\sby\ssign\sadd\sas\s/P\s1\sis,\sand\s/P\s02\stakes\sa\sfurther\ssignature
+D 2026-11-09T07:51:00.393
 F Makefile.in d91f5766c7267c53141b153feddddf9197a5bf92cdf5ab10a12126ba0e1fc13d
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -436,7 +436,7 @@ F tests/image.test e7d6c221db24e9b896faf1d1a9fc1212ccfb338802a546d0267884277f1c5
 F tests/imageTiff.test 604ce332f35891bdafdc46e252585cd28a032f56b4c71994ced98f071001b269
 F tests/imageTiffStreams.test 22c06c95311e7c4f6d8b742bd595f0943ad04135fcb236fa2bcb1861d2ccd8a2
 F tests/import.test e8e52a88ea410c6354b8093bfca1269983d2e959648cd8b1c368d7f4965f5600
-F tests/importDecimal.test 7849db6f2bbeff93dc590719c5d4d2a2a5db489b37f7526b3fecc29f0313ddf6
+F tests/importDecimal.test 63cd176982758242e0b50babbf3062091afb3e1d8c6d85301c61184fba045b8b
 F tests/importFields.test da84a5ba0c03ec243391f79a48ae519080f8fa79b6a3a78e3c33b48589f62fb6
 F tests/importLayer.test 33dff30aace8efa86b31882732e781990fbfda67adb1ffd8ed3cd408f5258a6b
 F tests/io.test 67d604b30207db8b11d791d8d2fa7d27c1f0ebee02d8221265c36b2106a71621
@@ -524,8 +524,8 @@ F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
 F xml.tcl 4e9e1dce2946e22d16a2814148f8c482daead21235f916059d13b880a6f73b08
 F xmp.tcl 06650fcfafd13f8e1391b6e6df2a85e5cacec39459fdec1f8ff7edb7076b72ba
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P b7ef4884fa99ecf7726c44e7405387dc3026e21aba7b0e5a0a1bef01013bd2c7
-R 3bc33a0a4bfd0da08e15f814cbb65a49
+P 9fd8236a607900a2c93645add4d66f382b0a48f0e709ae6139c1cfe1655af58b
+R 8e299b734e3b8904485ea9d82db75651
 U alex
-Z 1896cc0cfb0c7114c91616e7094c8a7c
+Z 3b939bdc03b2594de6f303459cce9128
 # Remove this line to create a well-formed Fossil manifest.

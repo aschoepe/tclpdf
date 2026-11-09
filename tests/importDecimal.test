@@ -462,4 +462,44 @@ test importDecimal-8.1 {a copied object carries the number, a copied stream its 
       [string match {*0 0 m 010 010 l S*} $bytes]
 } -result {{/LW 10 /CA 0.5} 1}
 
+#
+# --- a certification read with zeros -----------------------------------------
+#
+
+test importDecimal-9.1 {DocMDP /P 01 forbids every change, as /P 1 does} -body {
+  # 12.8.4.2, Table 257: /P 1 permits no change at all, and [sign add]
+  # refuses such a file. The refusal compares the value as text, so it rests
+  # on the reader handing over "1" for "01" - a file could otherwise step
+  # around it with one digit. /P 02 allows a further signature, as /P 2 does.
+  set result {}
+  foreach p {01 02} {
+    set doc [tclpdf new -unit mm -version 2.0]
+    $doc page add
+    set path [::tclpdfTest::scratch idec-docmdp-$p.pdf]
+    $doc write $path
+    $doc destroy
+    set upd [::tclpdf::update open $path]
+    set signature [$upd add "<< /Type /Sig /Filter /Adobe.PPKLite\
+        /SubFilter /adbe.pkcs7.detached /ByteRange \[0 100 200 300\]\
+        /Contents <3081> /Reference \[<< /Type /SigRef /TransformMethod /DocMDP\
+        /TransformParams << /Type /TransformParams /P $p /V /1.2 >> >>\] >>"]
+    set catalog [$upd trailer Root]
+    regexp {^\s*([0-9]+)} $catalog -> number
+    set body [$upd body $number]
+    $upd replace $number [string map [list ">>" \
+        "/Perms << /DocMDP [$upd ref $signature] >> >>"] $body]
+    $upd write
+    $upd destroy
+    # The file really carries the zero: otherwise this test proves nothing.
+    set written [string match "*/P $p /V*" [::tclpdfTest::readBytes $path]]
+    set size [file size $path]
+    set code [catch {::tclpdf::sign add $path -size 256} message]
+    lappend result $written $code \
+        [expr {$code ? [lrange $::errorCode 0 3] : {}}] \
+        [expr {[file size $path] > $size}]
+    file delete $path
+  }
+  set result
+} -result {1 1 {TCLPDF SIGN STATE certified} 0 1 0 {} 1}
+
 cleanupTests
