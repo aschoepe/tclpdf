@@ -632,8 +632,12 @@ oo::define ::tclpdf::document::document {
     }
 
     lassign [my state svgBox] boxX boxY boxWidth boxHeight
-    set units [expr {[dict exists $attributes gradientUnits]
-        ? [dict get $attributes gradientUnits] : {objectBoundingBox}}]
+    # Not a ternary in expr: the value is text, and expr would read a value
+    # of digits as a number.
+    set units objectBoundingBox
+    if {[dict exists $attributes gradientUnits]} {
+      set units [dict get $attributes gradientUnits]
+    }
     if {$units eq "userSpaceOnUse"} {
       set frameX $boxX
       set frameY $boxY

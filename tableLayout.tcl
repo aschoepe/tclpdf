@@ -242,7 +242,12 @@ oo::define ::tclpdf::document::document {
   # that marker, numbering and indent come from the one road [text] takes.
   method TableRuns {cell style} {
     set text [dict get $cell text]
-    set pairs [expr {[dict exists $cell runs] ? [dict get $cell runs] : {}}]
+    # Not a ternary in expr: the runs are text, and expr would read a value
+    # of digits as a number.
+    set pairs {}
+    if {[dict exists $cell runs]} {
+      set pairs [dict get $cell runs]
+    }
     if {![llength $pairs]} {
       switch -- [dict get $style markup] {
         tags {

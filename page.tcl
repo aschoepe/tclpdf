@@ -425,7 +425,12 @@ oo::define ::tclpdf::document::document {
       set record [lindex $tclpdfPages $top]
     }
     if {![llength $args]} {
-      return [expr {[dict exists $record $key] ? [dict get $record $key] : {}}]
+      # Not a ternary in expr: a record value is handed back as it stands,
+      # and expr would read a value of digits as a number.
+      if {[dict exists $record $key]} {
+        return [dict get $record $key]
+      }
+      return {}
     }
     dict set record $key [lindex $args 0]
     if {[llength $tclpdfCanvas]} {

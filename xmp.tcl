@@ -695,7 +695,10 @@ proc ::tclpdf::xmp::packet {descriptions info raw {seconds {}}} {
   if {[dict exists $info keywords]} {
     set keywords [dict get $info keywords]
   }
-  set language [expr {[dict exists $info language] ? [dict get $info language] : {}}]
+  set language {}
+  if {[dict exists $info language]} {
+    set language [dict get $info language]
+  }
   # The moment is HANDED IN by the caller, who shares it with the Info
   # dictionary's CreationDate - two clock reads here and there could straddle
   # a second and the two dates would disagree for the life of the file.

@@ -204,8 +204,12 @@ oo::define ::tclpdf::document::document {
     set arguments [my TextOverrides $options]
     my state textRuns [dict get $options runs]
     my state textRunsString $string
-    set paragraphs [expr {[dict exists $options runsParagraphs]
-        ? [dict get $options runsParagraphs] : {}}]
+    # Not a ternary in expr, here and twice below: the runs and their
+    # paragraphs are text, and expr would read a value of digits as a number.
+    set paragraphs {}
+    if {[dict exists $options runsParagraphs]} {
+      set paragraphs [dict get $options runsParagraphs]
+    }
     set widest 0
     set from 0
     set index 0
@@ -1231,7 +1235,10 @@ oo::define ::tclpdf::document::document {
     # drawing can reach them without every signature between here and there
     # growing an argument: set on every block, so a block without runs
     # leaves nothing behind for the next one to trip over.
-    set runs [expr {[dict exists $options runs] ? [dict get $options runs] : {}}]
+    set runs {}
+    if {[dict exists $options runs]} {
+      set runs [dict get $options runs]
+    }
     # The option's own default is the boolean 0, and a road that never went
     # through the intake - a caller of [TextBlockLines] from outside the
     # three public calls - hands it on as it is. A boolean is not a map:
@@ -1247,8 +1254,11 @@ oo::define ::tclpdf::document::document {
     # beside the block's - and, where it opens the block, the lift of the
     # first baseline is its ascent, not the block's; a list item has an
     # indent the band adds and a label [TextParagraphDraw] draws.
-    my state textRunsParagraphs [expr {[dict exists $options runsParagraphs]
-        ? [dict get $options runsParagraphs] : {}}]
+    set paragraphs {}
+    if {[dict exists $options runsParagraphs]} {
+      set paragraphs [dict get $options runsParagraphs]
+    }
+    my state textRunsParagraphs $paragraphs
     if {[llength $runs]} {
       foreach entry $runs {
         lassign $entry from to style own

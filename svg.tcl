@@ -425,7 +425,12 @@ oo::define ::tclpdf::document::document {
     # inside it. The attribute feeds the OPTIONS instead, which is where the
     # fitting already knows what to do with it.
     lassign [my SvgAspect $root $options] align meetOrSlice
-    set given [expr {[dict exists $options given] ? [dict get $options given] : {}}]
+    # Not a ternary in expr: the value is text, and expr would read a value
+    # of digits as a number.
+    set given {}
+    if {[dict exists $options given]} {
+      set given [dict get $options given]
+    }
     if {[dict get $options fit] ne {}} {
       if {"fitMode" ni $given} {
         dict set options fitMode [expr {$meetOrSlice eq "slice" ? {cover} : {contain}}]
