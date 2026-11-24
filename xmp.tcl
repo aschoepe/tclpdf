@@ -62,6 +62,7 @@ package require Tcl 8.6.11-
 package require TclOO
 package require tdom 0.9.0-
 package require tclpdf::document 1.0-
+package require tclpdf::xml 1.3-
 
 namespace eval ::tclpdf::xmp {
   namespace export {[a-z]*}
@@ -311,9 +312,9 @@ proc ::tclpdf::xmp::ParseRaw {xml} {
   variable namespaces
   if {[catch {dom parse "<rdf:RDF xmlns:rdf=\"[dict get $namespaces rdf]\"\
       >$xml</rdf:RDF>"} fragment message]} {
+    # The parser's own words, not the Tcl stack that -errorinfo would add.
     return -code error -errorcode [list TCLPDF XMP RAW] \
-        "tclpdf: XMP contribution is not well formed XML -\
-        [dict get $message -errorinfo]"
+        "tclpdf: XMP contribution is not well formed XML - $fragment"
   }
   # And that it is RDF. The wrapper's children are appended to the packet's
   # own rdf:RDF (see the loop in [packet]), where RDF/XML admits nothing but
@@ -1003,12 +1004,17 @@ proc ::tclpdf::xmp::CheckCaller {packet schemas} {
   if {![llength $schemas]} {
     return
   }
-  if {[catch {dom parse $packet} document]} {
+  # The entity checks of xml.tcl first: until 2026-11-24 a packet carrying
+  # an expansion bomb was parsed here without them and written as it stood,
+  # while the same packet handed to the SVG reader was refused. Parameter
+  # entities stay unresolved for the same reason as in xml.tcl.
+  ::tclpdf::xml amplification $packet
+  if {[catch {dom parse -paramentityparsing never $packet} document]} {
     return -code error -errorcode [list TCLPDF XMP CALLER packet] \
         "tclpdf: the XMP packet set with \[metadata\] is not\
         well formed XML, and this document has topics that have to describe\
         themselves in it ([join [lmap entry $schemas {lindex $entry 0}] {, }]).\
-        An XMP packet is RDF/XML (XMP part 1, 7.3)"
+        An XMP packet is RDF/XML (XMP part 1, 7.3) - $document"
   }
   set found {}
   foreach node [[$document documentElement] selectNodes {descendant-or-self::*}] {

@@ -1476,4 +1476,68 @@ test xmp-17.3 {a declaration in scope but unused counts as carrying the schema} 
   list $code $exists
 } -result {0 1}
 
+# -- the caller's packet goes through the entity checks of xml.tcl ----------
+
+# A packet with an internal subset, built around the entity declarations and
+# the text the root carries.
+proc ::tclpdfTest::callerPacketWith {declarations body} {
+  return "<?xpacket begin=\"\"?>\n<!DOCTYPE x:xmpmeta \[$declarations\]>\n<x:xmpmeta\
+      xmlns:x=\"adobe:ns:meta/\">$body</x:xmpmeta>\n<?xpacket end=\"w\"?>"
+}
+
+test xmp-18.1 {an expansion bomb in the caller's packet is refused before tdom parses it} -constraints {haveFace haveTdom} -body {
+  # Measured 2026-11-24: this packet was parsed here without the checks that
+  # [::tclpdf::xml parse] makes, accepted, and written as it stood.
+  set a [string repeat x 50]
+  set b [string repeat {&a;} 10]
+  set c [string repeat {&b;} 10]
+  set d [string repeat {&c;} 10]
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  $doc metadata [::tclpdfTest::callerPacketWith \
+      "<!ENTITY a \"$a\"><!ENTITY b \"$b\"><!ENTITY c \"$c\"><!ENTITY d \"$d\">" \
+      {&d;&d;}]
+  set path [::tclpdfTest::scratch xmp-caller-bomb.pdf]
+  set code [catch {$doc write $path} err]
+  set result [list $code [lrange $::errorCode 0 3] [file exists $path]]
+  $doc destroy
+  file delete $path
+  set result
+} -result {1 {TCLPDF XML ENTITY expansion} 0}
+
+test xmp-18.2 {an entity cycle in the caller's packet is refused as a cycle} -constraints {haveFace haveTdom} -body {
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  $doc metadata [::tclpdfTest::callerPacketWith \
+      {<!ENTITY a "&b;"><!ENTITY b "&a;">} {&a;}]
+  set path [::tclpdfTest::scratch xmp-caller-cycle.pdf]
+  set code [catch {$doc write $path} err]
+  set result [list $code [lrange $::errorCode 0 3] [file exists $path]]
+  $doc destroy
+  file delete $path
+  set result
+} -result {1 {TCLPDF XML ENTITY cycle} 0}
+
+test xmp-18.3 {a packet that is not well formed is refused with the parser's words} -constraints {haveFace haveTdom} -body {
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  $doc metadata "<?xpacket begin=\"\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">a & b</x:xmpmeta>\n<?xpacket end=\"w\"?>"
+  set path [::tclpdfTest::scratch xmp-caller-broken.pdf]
+  set code [catch {$doc write $path} err]
+  set result [list $code [lrange $::errorCode 0 3] \
+      [string match {*not well formed XML*} $err] \
+      [string match {*invalid token*} $err]]
+  $doc destroy
+  file delete $path
+  set result
+} -result {1 {TCLPDF XMP CALLER packet} 1 1}
+
+test xmp-18.4 {a raw contribution that is not well formed is refused without the Tcl stack} -constraints {haveFace haveTdom} -body {
+  set doc [probe $face]
+  set code [catch {$doc xmpRaw {<rdf:Description rdf:about="">a & b</rdf:Description>}} err]
+  $doc destroy
+  list $code [lrange $::errorCode 0 2] [string match {*invalid token*} $err] \
+      [string match {*while executing*} $err]
+} -result {1 {TCLPDF XMP RAW} 1 0}
+
 cleanupTests

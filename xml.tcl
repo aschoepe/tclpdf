@@ -45,6 +45,8 @@
 #   ::tclpdf::xml parent $node
 #   ::tclpdf::xml text $node
 #   ::tclpdf::xml release $handle  -> a tdom document is NOT freed by itself
+#   ::tclpdf::xml amplification $text  -> the entity checks alone, for a
+#                                  caller that parses with tdom itself
 #
 # What the parser below handles is what SVG files contain: elements,
 # attributes, nesting, comments, CDATA, processing instructions, the five
@@ -169,6 +171,12 @@ proc ::tclpdf::xml::Refused {text message} {
 # as written and saw no reference in it, so a bomb spelled that way passed -
 # tdom's expat then stopped it at its own limit, past eight megabytes, and
 # answered with nothing a caller could trap.
+proc ::tclpdf::xml::amplification {text} {
+  # The checks alone, for xmp.tcl, which parses with tdom itself and needs
+  # the bomb refused before expat sees it, under the same codes as here.
+  Amplification $text
+}
+
 proc ::tclpdf::xml::Amplification {text} {
   variable amplificationLimit
   variable amplificationFloor
