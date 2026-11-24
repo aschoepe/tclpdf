@@ -1,5 +1,5 @@
-C Read\sgradient\sstops\slike\sfills\sand\swrite\sSVG\scoordinates\sas\sPDF\snumbers\n\n-\ssvgPaint:\sstop-color\sgoes\sthrough\sthe\ssame\scolour\sreader\sas\sfill\sand\sstroke\s-\srgb(),\srgba(),\spercentages,\scurrentColor\sand\sinherit;\san\srgba()\salpha\smultiplies\sinto\sstop-opacity;\sNaN\sis\srefused\sas\sTCLPDF\sSVG\sCOLOUR\sstop-color\n-\ssvgElement:\sthe\sx\sand\sy\sof\sa\srect,\sthe\sends\sof\sa\sline\sand\sthe\spoints\sof\sa\spolyline\sor\spolygon\sare\swritten\sthrough\spdfObj\snum,\sso\san\sexponent\sin\sthe\sfile\sdoes\snot\sreach\sthe\sstream\n-\ssvgElement:\sin\spoints,\sanything\sthat\sis\snot\sa\snumber\sends\sthe\slist\sand\sis\sreported\sas\spoints,\sinstead\sof\sbeing\sstepped\sover\sand\sshifting\sthe\spairs\n-\smanual:\sthe\sfunctional\snotation\sand\sthe\sSVG\sCOLOUR\srefusal\sname\sstop-color\sbeside\sfill\sand\sstroke\n-\stests:\ssvg-stop-42.1\sto\s42.8,\ssvg-exp-43.1\sto\s43.7\n-\sexample\s03.11:\sa\sstop\sin\srgb()\sand\sa\spoint\swith\san\sexponent
-D 2026-11-24T21:10:17.382
+C Make\sboth\sXML\sparsers\srefuse\sthe\ssame\sfiles\sunder\sthe\ssame\serror\scodes\n\n-\sxml:\sa\stdom\sparse\serror\sis\sreported\sas\sTCLPDF\sXML\sMALFORMED\swith\sthe\sclass\sthe\sbuilt-in\sparser\sgives\sthe\ssame\sdocument,\sor\ssyntax\swhen\sonly\stdom\sobjects\n-\sxml:\sthe\sbuilt-in\sparser\srefuses\sa\sbare\sampersand\sas\sMALFORMED\sampersand\sand\san\sundeclared\sentity\sreference\sas\sMALFORMED\sreference,\sin\stext\sand\sin\sattributes;\sa\sdocument\swith\san\sexternal\ssubset\sor\sa\sparameter\sentity\skeeps\sundeclared\sreferences,\sas\stdom\sdoes,\sunless\sit\sis\sstandalone\n-\sxml:\sthe\sdoctype\sis\sread\sonce\sby\sEntities,\sfor\sthe\samplification\scheck\sand\sfor\sthe\sparser\n-\ssvg:\ssvg\sand\ssvg\ssize\sparse\sthrough\sone\smethod,\sSvgParse,\swhich\smaps\sXML\sMALFORMED\sand\sXML\sEMPTY\sto\sTCLPDF\sSVG\sXML\sMALFORMED\sand\sleaves\sXML\sENTITY\scodes\sas\sthey\sare\n-\smanual:\sboth\sparsers\sanswer\sthe\ssame\sfile\sthe\ssame\sway\n-\stests:\ssvg-malformed-40.2\sto\s40.7;\ssvg-1.13\sand\sfileDecimal-7.1\sfollow\sthe\snew\sbehaviour
+D 2026-11-24T21:27:11.868
 F Makefile.in d91f5766c7267c53141b153feddddf9197a5bf92cdf5ab10a12126ba0e1fc13d
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -42,7 +42,7 @@ F doc/claude/skills/tclpdf-tcl/reference/11-encryption-signatures.md 7bd44de0356
 F doc/claude/skills/tclpdf-tcl/reference/12-import-update-info.md 104bdf7b603f2632a1cd17a5fd71717aeb4489ef7bd0e1b3eae5f24796bb72a0
 F doc/claude/skills/tclpdf-tcl/reference/13-form-fields.md d6dd58f4f6d4f250c4875e5bc13593cefa9625bc5d0f0773f70fbe5c79d34686
 F doc/tclpdf-default.html b543496816ce1ebbc250ce38eb1672a0a58cee20f635b1bd0d739a651a4cbe55
-F doc/tclpdf.md 374ec05c95b3ec61907b87da4e3d853b131800fde2cb60dd9ffb0f0f3a50c805
+F doc/tclpdf.md 1d679dc6c05879d2ba5ea19fc9f26c40f39642609213be48e8af18c9593ebebe
 F document.tcl 6f254e4aae04f01b0f97be550590dccf49cb38b41c93e2f1c0c114c0ac49e377
 F encrypt.tcl 8137afb09bf8f0548ab8220feae2ee49980eedf1b47c1eba8226cb91f4dc6662
 F event.tcl bf7548f7b6c7e92f70b14294d5cc7bae89c00dbfbe5afd51e5d7c17739f55b6a
@@ -378,7 +378,7 @@ F structureDest.tcl a2f60c1f055f08b60bde22affe5b2a42fe7c48ec6dccb7dc78922138ed88
 F structureReport.tcl 0333df32a94fc5b3f10c4c3690792f7ce6b38c50f25c69a7f4ee410f3c20a073
 F structureWrite.tcl d22f84a93a66372d829ee232d3046dbb193af4dd1d9d95b86e676a642222cb90
 F subset.tcl f16f0f1dd1b6337e2ba306964c30a715ed7623b536c3ca4b11f02e4e44bbb747
-F svg.tcl 0ead03dd22ae63a034e76a3d5e876877288a5c198af5f7d108983b8b9ec852ed
+F svg.tcl 106e3ee42ccd9d6682d874a0648256f80b1905435944bd69e5938b1743d10a6b
 F svgClip.tcl ebd4c96cc1ed12b3b91e87952398391e84f2a3d5c8acbe6821f641b732091e4f
 F svgElement.tcl 4186d24366a2de697515640ceca83ed01debd1dadba03096ba5018bb78a2f941
 F svgPaint.tcl cfb20f00ec548bc068d0f8e328ec81b0c4e1b7e8c2d9d70fa38c988677e3ec13
@@ -418,7 +418,7 @@ F tests/field.test dc1d2899e080d7ee9ed9f0c359ca14fa33be19eb26624c71e1103ff6a58fc
 F tests/fieldButton.test 8bb12e723c036ce3703294e1cde27b990c67cb84e27f706bb235ec35d3efe396
 F tests/fieldChoice.test d89c5560e13f9a80031c6b82f0439629516cab730f619395f1dd3acb34022190
 F tests/fieldText.test 740f30236c9e2769e5f046e5cd2fa6d16a55419f037337700aec2f463ed96f27
-F tests/fileDecimal.test ad1c17afee24cf8a8c261e6859624c9fc15020ca6a283d8887a9d028a30a9ebf
+F tests/fileDecimal.test 07f399b108bec1147f47eec9499335c50f7f0fbcf1625437945a2d60611c8c4e
 F tests/filter.test a42dd9303c499c4866b8f6693cb53e7a56ad0ea390b17c0be49b46cc889cf9fa
 F tests/filterCcitt.test 74002b8471633d2f813cd0076d136220e16c72a83b7119db003df3229064920e
 F tests/font.test 2a4a01215e15d8bf5985d5f3cfee0695a8abde2e45c10c7e2a51991b176ac097
@@ -469,7 +469,7 @@ F tests/shaping.test 2782df5ad77b4d09adaa5ce270cb511b84b2f42702daed2e31517f4e845
 F tests/sign.test 8be70999a5229cd06a4f52853465d35bb4554c26e7777651c498a84eacbdcd48
 F tests/structure.test d7467020023eecec7f821f3bf337161ef8ba592a93a98a07cc3094dfad2fa70a
 F tests/subset.test c7dde96f5d7cc81fdf992519335c2e6cb9059e0d1cad867fac7583e27226721b
-F tests/svg.test d3fa962bf4ae0e937cd4f666cb2c32fa7334afd0606be553bdfc70f220fc030a
+F tests/svg.test 75552653aee712d30547f30f487a9012498faadc4fd7bd6d885a4ee045da420f
 F tests/svgClip.test 9b371c204d320710241d043ee4b6507f7b4009de2d6185087516376f2a88dfc5
 F tests/table.test 191ed38722067c37bcce0862722d6360da693ce9852b11b28c5248e8c1ec8c41
 F tests/text.test 48a08bbc690c666ba1f676caecfcec366c20af891a0c0f8be44e022a75498e0b
@@ -521,11 +521,11 @@ F varFont.tcl 97635f5c8678908ab65628bbdaf126cc2c68a6339a277ddb72707266dd604404
 F viewerPreferences.tcl afdc8f5f88e46c8d790310d5f5b24468725804d421883a9260c8fb5bd02a0c98
 F writer.tcl 8811bb2b6cb9e4742c6bf5a713089017e8778fa41356537a7b0787ad35b18835
 F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
-F xml.tcl daff381087dc14bc32df6608997d270ea3daa2d1523566beb3616f3f5a8a8d41
+F xml.tcl ab03b57f66bbbd38be26e98990cd88c6a262d54d773cd53c748d555fd6d2b942
 F xmp.tcl 9c5e5301ec72953c3067176bb46d984af1a52c1a7f53cff87d07f843d79fded1
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 7f8e0a8561f83ae5d37900ca5758a85abf93dde3a8c706cf99031d93de7906b2
-R 84b0226425aa6013552bd121fed5fc70
+P 438ab97090446ae1c4f911cfe3730277ce022397c780a42b7130897dfac95fac
+R 28945eccf5e86d25e9a2d5d5f6a173f2
 U alex
-Z 32bf43eb500d3808a076c2b9d208dc3c
+Z 1b5852c9f7e04d6d74138a6e1b70d762
 # Remove this line to create a well-formed Fossil manifest.

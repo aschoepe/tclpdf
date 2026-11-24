@@ -551,7 +551,10 @@ test fileDecimal-6.2 {nor does a colour name, a CFF real or a pattern file} -bod
 # these tests switch it off and put the switch back whatever happens.
 
 test fileDecimal-7.1 {Attributes hands every value back as it was written} -body {
-  ::tclpdf::xml::Attributes { x="010" y='08' z="0x1A" w='0012.5'}
+  # The second argument is what the document declares - here nothing, as in
+  # a document without a doctype.
+  ::tclpdf::xml::Attributes { x="010" y='08' z="0x1A" w='0012.5'} \
+      [::tclpdf::xml::Entities {}]
 } -result {x 010 y 08 z 0x1A w 0012.5}
 
 test fileDecimal-7.2 {and so does xml parse without tdom, quoted either way} -setup {

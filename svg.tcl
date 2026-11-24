@@ -271,19 +271,7 @@ oo::define ::tclpdf::document::document {
     if {[dict get $options opacity] ne {}} {
       dict set options opacity [my GraphicsOpacity [dict get $options opacity]]
     }
-    # The XML reader speaks its own language: tdom answers a malformed
-    # document with "error ... at line 1 character 4" and an -errorcode of
-    # NONE - measured 2026-08-26 on "-data {<svg}" - against the promise
-    # that every refusal of this package begins with "tclpdf:" and carries a
-    # TCLPDF code. Wrapped here rather than in xml.tcl because that module
-    # serves XMP and ZUGFeRD as well, and each of them names its own topic.
-    if {[catch {::tclpdf::xml parse $markup} root outcome]} {
-      if {[lindex [dict get $outcome -errorcode] 0] ne "TCLPDF"} {
-        return -code error -errorcode {TCLPDF SVG XML MALFORMED} \
-            "tclpdf: the drawing is not well-formed XML - $root"
-      }
-      return -options $outcome $root
-    }
+    set root [my SvgParse $markup]
     try {
       # Where the drawing will land, worked out before the mark: a Figure
       # carries the area it covers as an attribute (ISO 32000-2, 14.8.5.4.3),
@@ -950,9 +938,50 @@ oo::define ::tclpdf::document::document {
     return $text
   }
 
+  # The markup as an element tree, or the refusal of a drawing that is not
+  # well-formed XML - for drawing and for [svg size] alike, which used to
+  # differ: only the drawing was wrapped, and "svg size" handed tdom's NONE
+  # straight to the caller.
+  #
+  # THE CODE IS DECIDED HERE, ONCE, for both callers and both parsers:
+  #
+  #   not well formed, or no element at all   TCLPDF SVG XML MALFORMED <fact>
+  #   entities past the limit, or a cycle     TCLPDF XML ENTITY <what>
+  #
+  # SVG XML MALFORMED is the code the manual's table gives the SVG topic and
+  # the one svg-malformed-40.1 has pinned since round 7. xml.tcl answers in its
+  # own topic - TCLPDF XML MALFORMED or EMPTY, the same code from tdom and from
+  # its own parser since 2026-11-24 - and both are taken into the SVG topic
+  # here, with the XML code's fact as the fifth word (an element name,
+  # "unclosed", "ampersand", "reference", "syntax"; "empty" for EMPTY). Before
+  # that, the same file came back as SVG XML MALFORMED with tdom and as XML
+  # MALFORMED without it. A document with no element is not well formed
+  # either (XML 1.0, 2.1, production [1]), and "<svg" is one with tdom and
+  # the other without, so EMPTY goes the same way. ENTITY is left in the XML
+  # topic as it stands: it is the availability limit, documented on its own
+  # and refused before any parser runs. A code that does not begin with
+  # TCLPDF can no longer come out of xml.tcl, and is mapped all the same.
+  method SvgParse {markup} {
+    if {![catch {::tclpdf::xml parse $markup} root outcome]} {
+      return $root
+    }
+    set code [dict get $outcome -errorcode]
+    if {[lindex $code 0] eq "TCLPDF"
+        && [lrange $code 0 2] ni {{TCLPDF XML MALFORMED} {TCLPDF XML EMPTY}}} {
+      return -options $outcome $root
+    }
+    set fact [lrange $code 3 end]
+    if {[lrange $code 0 2] eq {TCLPDF XML EMPTY}} {
+      set fact empty
+    }
+    regsub {^tclpdf: (?:XML is not well formed - )?} $root {} detail
+    return -code error -errorcode [list TCLPDF SVG XML MALFORMED {*}$fact] \
+        "tclpdf: the drawing is not well-formed XML - $detail"
+  }
+
   # The drawing's own size, for a caller who wants to place it unscaled.
   method SvgSize {path} {
-    set root [::tclpdf::xml parse [my SvgDecode [::tclpdf::io read $path]]]
+    set root [my SvgParse [my SvgDecode [::tclpdf::io read $path]]]
     try {
       lassign [my SvgViewBox $root] -> -> width height
     } finally {
