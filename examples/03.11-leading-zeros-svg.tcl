@@ -15,7 +15,8 @@
 #
 # The example makes the same document twice: once from a drawing whose
 # numbers carry leading zeros - coordinates, path data, transform, viewBox,
-# stroke width, rgb(), a gradient offset, a font size - with a Lab colour
+# stroke width, rgb() in a fill and in a gradient stop, a gradient offset, a
+# coordinate with an exponent, a font size - with a Lab colour
 # written {lab 050 0 0} and a paragraph hyphenated by a pattern file that
 # says LEFTHYPHENMIN 010; once from the same things without the zeros. Both
 # are written uncompressed and compared byte for byte, the random file
@@ -48,7 +49,7 @@ set leading {<svg width="0160" height="0100" viewBox="0 0 080 050"
     xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="sky" x1="0" y1="0" x2="0" y2="01">
-      <stop offset="010%" stop-color="steelblue"/>
+      <stop offset="010%" stop-color="rgb(070,0130,0180)"/>
       <stop offset="090%" stop-color="white"/>
     </linearGradient>
   </defs>
@@ -57,7 +58,7 @@ set leading {<svg width="0160" height="0100" viewBox="0 0 080 050"
     <path d="M00 030 L015 010 L030 030 Z M020 030 l010 -015 l010 015 z"
         fill="rgb(060,090,070)" stroke="rgb(030,040,030)" stroke-width="00.8"/>
   </g>
-  <polyline points="045,040 055,034 065,038 075,030" fill="none"
+  <polyline points="04.5e1,040 055,034 065,038 075,030" fill="none"
       stroke="rgb(0128,040,030)" stroke-width="02" stroke-dasharray="03 01"/>
   <circle cx="068" cy="012" r="06" fill="rgb(0250,0200,060)"/>
   <text x="03" y="047" font-size="04" fill="rgb(020,020,060)">ten is ten</text>
@@ -132,7 +133,8 @@ $doc text "The numbers of a drawing are decimal" -at [list 20 $y]
 set y 32
 examplePara $doc y "The drawing on the left writes width=\"0160\", viewBox=\"0 0\
     080 050\", \"M00 030 L015 010\", translate(010 08), rgb(0128,040,030),\
-    offset=\"010%\" and font-size=\"04\"; the one on the right the same numbers\
+    stop-color=\"rgb(070,0130,0180)\", offset=\"010%\", the point\
+    \"04.5e1,040\" and font-size=\"04\"; the one on the right the same numbers\
     without the zeros. Under Tcl 8.6 the left one would otherwise be read in\
     octal - 010 as eight - and refused outright, since 08 and 090 are no\
     numbers to it."

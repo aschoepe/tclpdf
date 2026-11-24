@@ -822,12 +822,45 @@ oo::define ::tclpdf::document::document {
       if {$colour eq {} || [string match "url(*" $colour]} {
         set colour black
       }
+      # currentColor stands for the stop's own "color" property, resolved
+      # by the rule [SvgStyle] applies to "color": empty, currentColor and
+      # inherit are its initial value, black. The stop's ancestors are not
+      # consulted - a gradient is read apart from the cascade of the shape
+      # it fills. inherit as a stop-color takes the gradient's, which is
+      # not read either; its initial value is black as well.
+      set colour [string trim $colour]
+      if {[string equal -nocase $colour currentColor]} {
+        set colour [::tclpdf::xml attribute $child color]
+        if {[dict exists $declarations color]} {
+          set colour [dict get $declarations color]
+        }
+        set colour [string trim $colour]
+      }
+      if {$colour eq {} || [string equal -nocase $colour currentColor] ||
+          [string equal -nocase $colour inherit]} {
+        set colour black
+      }
+      # THE FUNCTIONAL NOTATION, through the same reader as fill and stroke
+      # ([SvgColourValue]). Until 2026-11-24 a stop in rgb() or rgba(), as
+      # an attribute or in style="", reached the colour module as a colour
+      # name and cost the whole drawing under TCLPDF COLOUR UNKNOWN. An
+      # rgba() alpha multiplies into stop-opacity, as it does into
+      # fill-opacity for a fill.
+      lassign [my SvgColourValue $colour stop-color] colour alpha
       set opacity [::tclpdf::xml attribute $child stop-opacity]
       if {[dict exists $declarations stop-opacity]} {
         set opacity [dict get $declarations stop-opacity]
       }
+      # In decimal, because it may be multiplied by that alpha before it is
+      # clamped - the rule [SvgStyle] follows for the three opacities.
+      if {[regexp {^[-+]?0[0-9]} $opacity]} {
+        set opacity [::tclpdf::pdfObj::decimal $opacity]
+      }
       if {![::tclpdf::option finite $opacity]} {
         set opacity 1
+      }
+      if {$alpha != 1} {
+        set opacity [expr {$opacity * $alpha}]
       }
       lappend stops [list $offset $colour [expr {max(0.0, min(1.0, $opacity))}]]
     }

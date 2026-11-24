@@ -1,5 +1,5 @@
-C Keep\sglyph\sbytes,\scharstring\stables\sand\sfont\snames\sout\sof\sexpr\n\n-\sfont,\svarFont:\sthe\sbytes\sof\sa\sglyph\sare\staken\sby\sif/else,\sno\slonger\sthrough\san\sexpr\sternary\n-\ssfnt:\sthe\slocal\sor\sglobal\ssubroutine\stable\sof\sa\sCFF\scharstring\sis\schosen\sby\sif/else,\sin\sCffWidth\sand\sCffTop\n-\sfont:\sfontsWithoutProgram\sreports\sa\sBaseFont\sof\sdigits\sas\sit\sis\swritten\n-\stests:\sfont-31.1\sto\s31.3,\svarFont-21.1,\ssfnt-8.1,\ssfnt-8.2\n-\svarFont\s1.5
-D 2026-11-24T20:55:28.767
+C Read\sgradient\sstops\slike\sfills\sand\swrite\sSVG\scoordinates\sas\sPDF\snumbers\n\n-\ssvgPaint:\sstop-color\sgoes\sthrough\sthe\ssame\scolour\sreader\sas\sfill\sand\sstroke\s-\srgb(),\srgba(),\spercentages,\scurrentColor\sand\sinherit;\san\srgba()\salpha\smultiplies\sinto\sstop-opacity;\sNaN\sis\srefused\sas\sTCLPDF\sSVG\sCOLOUR\sstop-color\n-\ssvgElement:\sthe\sx\sand\sy\sof\sa\srect,\sthe\sends\sof\sa\sline\sand\sthe\spoints\sof\sa\spolyline\sor\spolygon\sare\swritten\sthrough\spdfObj\snum,\sso\san\sexponent\sin\sthe\sfile\sdoes\snot\sreach\sthe\sstream\n-\ssvgElement:\sin\spoints,\sanything\sthat\sis\snot\sa\snumber\sends\sthe\slist\sand\sis\sreported\sas\spoints,\sinstead\sof\sbeing\sstepped\sover\sand\sshifting\sthe\spairs\n-\smanual:\sthe\sfunctional\snotation\sand\sthe\sSVG\sCOLOUR\srefusal\sname\sstop-color\sbeside\sfill\sand\sstroke\n-\stests:\ssvg-stop-42.1\sto\s42.8,\ssvg-exp-43.1\sto\s43.7\n-\sexample\s03.11:\sa\sstop\sin\srgb()\sand\sa\spoint\swith\san\sexponent
+D 2026-11-24T21:10:17.382
 F Makefile.in d91f5766c7267c53141b153feddddf9197a5bf92cdf5ab10a12126ba0e1fc13d
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -42,7 +42,7 @@ F doc/claude/skills/tclpdf-tcl/reference/11-encryption-signatures.md 7bd44de0356
 F doc/claude/skills/tclpdf-tcl/reference/12-import-update-info.md 104bdf7b603f2632a1cd17a5fd71717aeb4489ef7bd0e1b3eae5f24796bb72a0
 F doc/claude/skills/tclpdf-tcl/reference/13-form-fields.md d6dd58f4f6d4f250c4875e5bc13593cefa9625bc5d0f0773f70fbe5c79d34686
 F doc/tclpdf-default.html b543496816ce1ebbc250ce38eb1672a0a58cee20f635b1bd0d739a651a4cbe55
-F doc/tclpdf.md c76eac4c6ce13e0333288491a86764ca213fedc209da8c6c29342c938632080d
+F doc/tclpdf.md 374ec05c95b3ec61907b87da4e3d853b131800fde2cb60dd9ffb0f0f3a50c805
 F document.tcl 6f254e4aae04f01b0f97be550590dccf49cb38b41c93e2f1c0c114c0ac49e377
 F encrypt.tcl 8137afb09bf8f0548ab8220feae2ee49980eedf1b47c1eba8226cb91f4dc6662
 F event.tcl bf7548f7b6c7e92f70b14294d5cc7bae89c00dbfbe5afd51e5d7c17739f55b6a
@@ -97,7 +97,7 @@ F examples/03.07-image-masks.tcl cd5d99a55760a8441aef07ea408bccc625364308d2a6849
 F examples/03.08-image-tiff.tcl 0f59afc968a56010a6a2c3dbd519738a993523c6a9b3692442b84b1a94d8798e
 F examples/03.09-image-fit.tcl b7524b8bddb709da0b8b69a4fffee39c62fd411d9f2591e43a992f7c500a463d
 F examples/03.10-svg-clip.tcl 9977ad3ad44901afd1224105afed9cedbd7aa8b71d1b12c6559f43a1e4adb0dc
-F examples/03.11-leading-zeros-svg.tcl ce2ff10ef5415cc2f3d19b3c60df172e69cd8f622f97d460863e80d70d1eaea3
+F examples/03.11-leading-zeros-svg.tcl 62ae0b91a16e854babf81796cddac9412d297a7a81cfd6154618d4fe075cd62e
 F examples/04.01-table-basics.tcl 5085f14077df2d29567e6849e107d1a5710e9905ed60962a58c8196d2cd3aac1
 F examples/04.02-table-paging.tcl b9a3afee6d2cfacb6b2e618ab88f4a8e747770a91ef0a235104c7db1db5ba327
 F examples/04.03-table-spans.tcl 08385cbeac669bf0f1556c4548135a797a5197905bb5212192f4ebf938fee2cf
@@ -380,8 +380,8 @@ F structureWrite.tcl d22f84a93a66372d829ee232d3046dbb193af4dd1d9d95b86e676a64222
 F subset.tcl f16f0f1dd1b6337e2ba306964c30a715ed7623b536c3ca4b11f02e4e44bbb747
 F svg.tcl 0ead03dd22ae63a034e76a3d5e876877288a5c198af5f7d108983b8b9ec852ed
 F svgClip.tcl ebd4c96cc1ed12b3b91e87952398391e84f2a3d5c8acbe6821f641b732091e4f
-F svgElement.tcl fa4f081683568612877fd8543b50583ef9575bf564746b4d3f0061f1a1d39a72
-F svgPaint.tcl da990c4e89febd18e915f9bcd402f3aa3920d9593a3adf3b1bd9c7812e9228ed
+F svgElement.tcl 4186d24366a2de697515640ceca83ed01debd1dadba03096ba5018bb78a2f941
+F svgPaint.tcl cfb20f00ec548bc068d0f8e328ec81b0c4e1b7e8c2d9d70fa38c988677e3ec13
 F svgPath.tcl 8309e51fcf5b5fe54d501f6f4822bf24d68798f854d059f7aab2f52688fb82ff
 F table.tcl 3a3c2e9f596e7f9995d8bbbae717529384508bb958fbc3248c37718d34fab2c8
 F tableDraw.tcl 30c898a8a98dd6cd40192dd08aa4498da84d7dc25d9928afb050a6d0266701f1
@@ -469,7 +469,7 @@ F tests/shaping.test 2782df5ad77b4d09adaa5ce270cb511b84b2f42702daed2e31517f4e845
 F tests/sign.test 8be70999a5229cd06a4f52853465d35bb4554c26e7777651c498a84eacbdcd48
 F tests/structure.test d7467020023eecec7f821f3bf337161ef8ba592a93a98a07cc3094dfad2fa70a
 F tests/subset.test c7dde96f5d7cc81fdf992519335c2e6cb9059e0d1cad867fac7583e27226721b
-F tests/svg.test b3b404c259d7d358206f8122b7f0ba557342385ffad37b1a8c1dfb2aaae56df7
+F tests/svg.test d3fa962bf4ae0e937cd4f666cb2c32fa7334afd0606be553bdfc70f220fc030a
 F tests/svgClip.test 9b371c204d320710241d043ee4b6507f7b4009de2d6185087516376f2a88dfc5
 F tests/table.test 191ed38722067c37bcce0862722d6360da693ce9852b11b28c5248e8c1ec8c41
 F tests/text.test 48a08bbc690c666ba1f676caecfcec366c20af891a0c0f8be44e022a75498e0b
@@ -524,8 +524,8 @@ F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
 F xml.tcl daff381087dc14bc32df6608997d270ea3daa2d1523566beb3616f3f5a8a8d41
 F xmp.tcl 9c5e5301ec72953c3067176bb46d984af1a52c1a7f53cff87d07f843d79fded1
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 2093c9ce0521216d889cc2d283fa47dab6e72a6cbf76698ebebea1c4d3203183
-R 2c48f07ca2fd29c3c34f39f4e5a0ae2f
+P 7f8e0a8561f83ae5d37900ca5758a85abf93dde3a8c706cf99031d93de7906b2
+R 84b0226425aa6013552bd121fed5fc70
 U alex
-Z c5293129bc422d840eb1bcd566b1e773
+Z 32bf43eb500d3808a076c2b9d208dc3c
 # Remove this line to create a well-formed Fossil manifest.

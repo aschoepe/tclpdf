@@ -633,8 +633,13 @@ oo::define ::tclpdf::document::document {
           return {}
         }
         # A zero radius disables the rounding, not the element.
+        # x and y through [pdfObj num] like the two extents. [SvgLength]
+        # hands a number back as the file wrote it, so x="1e1" reached the
+        # stream as "1e1" - an exponent, which a PDF number cannot carry
+        # (ISO 32000-2, 7.3.3) - and [SvgBounds] read it as "1" and "e" and
+        # died in Tcl's words, ARITH DOMAIN (measured 2026-11-24).
         if {$rx eq {} || $rx == 0 || $ry == 0} {
-          return "$x $y [$N num [expr {$width}]]\
+          return "[$N num $x] [$N num $y] [$N num [expr {$width}]]\
               [$N num [expr {$height}]] re\n"
         }
         # AND EACH IS CAPPED AT HALF ITS SIDE (9.2). Uncapped, rx="40" on a
@@ -687,18 +692,52 @@ oo::define ::tclpdf::document::document {
         return [::tclpdf::svgPath operators $data $::tclpdf::svg::identity]
       }
       line {
-        return "[list [my SvgLength [::tclpdf::xml attribute $node x1] 0 x] \
-            [my SvgLength [::tclpdf::xml attribute $node y1] 0 y]] m\n[list \
-            [my SvgLength [::tclpdf::xml attribute $node x2] 0 x] \
-            [my SvgLength [::tclpdf::xml attribute $node y2] 0 y]] l\n"
+        # Through [pdfObj num], for the reason given at the rectangle: "1e1"
+        # as it stood died in [SvgBounds] with a code of NONE under Tcl 8.6
+        # and TCL VALUE NUMBER under Tcl 9 (measured 2026-11-24).
+        set x1 [my SvgLength [::tclpdf::xml attribute $node x1] 0 x]
+        set y1 [my SvgLength [::tclpdf::xml attribute $node y1] 0 y]
+        set x2 [my SvgLength [::tclpdf::xml attribute $node x2] 0 x]
+        set y2 [my SvgLength [::tclpdf::xml attribute $node y2] 0 y]
+        return "[$N num $x1] [$N num $y1] m\n[$N num $x2] [$N num $y2] l\n"
       }
       polyline - polygon {
         # Read in decimal ([svgPath numbers]): "010,010" is ten and ten.
         # Until 2026-11-07 the numbers went into the stream as written -
         # "010 010 m" under both interpreters, measured - and "08" stopped
         # the whole drawing under Tcl 8.6.
-        set numbers [::tclpdf::svgPath::numbers \
-            [::tclpdf::xml attribute $node points]]
+        set points [::tclpdf::xml attribute $node points]
+        set numbers [::tclpdf::svgPath::numbers $points]
+        # WHAT IS NO NUMBER ENDS THE LIST, it is not stepped over. The reader
+        # picks the numbers out of the text, so "NaN,1 2,3" came back as
+        # 1 2 3 and the pairs shifted by one - a point the file never named,
+        # drawn without a word (measured 2026-11-24). SVG 1.1, 9.7.1 asks the
+        # same as for an odd count below: render up to the last properly
+        # specified point and report the rest, as "points". Between two
+        # numbers only white space and commas may stand.
+        set count 0
+        set end 0
+        set broken 0
+        foreach match [regexp -all -inline -indices -- \
+            $::tclpdf::svgPath::numberPattern $points] {
+          lassign $match first last
+          if {![regexp {^[\s,]*$} [string range $points $end $first-1]]} {
+            set broken 1
+            break
+          }
+          incr count
+          set end [expr {$last + 1}]
+        }
+        if {!$broken && ![regexp {^[\s,]*$} [string range $points $end end]]} {
+          set broken 1
+        }
+        if {$broken} {
+          set numbers [lrange $numbers 0 $count-1]
+          if {[llength $numbers] % 2} {
+            set numbers [lrange $numbers 0 end-1]
+          }
+          my SvgSkipped points
+        }
         # AN ODD NUMBER OF COORDINATES IS AN ERROR, and SVG 1.1, 9.6/9.7 say
         # what to do with it: "the element is in error ... the document shall
         # be rendered up to, but not including, the last properly specified
@@ -714,8 +753,11 @@ oo::define ::tclpdf::document::document {
         }
         set result {}
         set operator m
+        # Through [pdfObj num]: "1e1" is a number to the reader above and
+        # none to PDF (7.3.3), and as it stood it died in [SvgBounds] in
+        # Tcl's words (measured 2026-11-24).
         foreach {x y} $numbers {
-          append result "$x $y $operator\n"
+          append result "[$N num $x] [$N num $y] $operator\n"
           set operator l
         }
         if {$name eq "polygon"} {
