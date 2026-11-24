@@ -2651,8 +2651,13 @@ oo::define ::tclpdf::document::document {
       set loca [dict get $parsed loca]
       set start [lindex $loca $glyph]
       set stop [lindex $loca [expr {$glyph + 1}]]
-      set data [expr {$start >= $stop ? {} :
-          [string range [::tclpdf::sfnt table $parsed glyf] $start [expr {$stop - 1}]]}]
+      # Not a ternary in expr: expr would read glyph bytes such as 0123 as a
+      # number (83 under Tcl 8.6, 123 under 9.0) and 1.10 as 1.1.
+      set data {}
+      if {$start < $stop} {
+        set data [string range [::tclpdf::sfnt table $parsed glyf] $start \
+            [expr {$stop - 1}]]
+      }
     }
     if {[string length $data] < 10} {
       return {}
@@ -2835,9 +2840,11 @@ oo::define ::tclpdf::document::document {
       }
       # Name the FAMILY, not the resource - "F1 is not embedded" tells a
       # caller nothing about which call to fix.
-      unset -nocomplain family
+      # Not a ternary in expr: a BaseFont of digits such as 0123 would reach
+      # the caller as 83 under Tcl 8.6 and as 123 under 9.0.
+      set family $name
       regexp {/BaseFont /(\S+?)[ />]} [[my writer] body $number] -> family
-      lappend missing [expr {[info exists family] ? $family : $name}]
+      lappend missing $family
     }
     return [lsort -unique $missing]
   }

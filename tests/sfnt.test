@@ -623,4 +623,35 @@ test sfnt-7.4 {closing a face twice is closing it once} -constraints haveFont \
   ::tclpdf::sfnt closeFace [::tclpdf::sfnt read $fontRegular]
 } -result {}
 
+# The subroutines of a CFF are a list of charstrings, and a list of one
+# charstring is that charstring - which may read as a number. [CffWidth] and
+# [CffTop] picked the local or the global list through an [expr] ternary, and
+# a list holding the one subroutine 010 came back as 8 under Tcl 8.6 and as 10
+# under 9.0: a different charstring, walked as if it were the face's. The
+# charstrings are constructed. The main one is "-107 callsubr" (or callgsubr)
+# followed by an operator, and -107 is subroutine 0 of a list shorter than
+# 1240 (TN 5177, section 4.7). The subroutine 010 pushes -91 -90 -91.
+
+test sfnt-8.1 {the width is read from the subroutine as it is} -body {
+  # hstem with an odd count: the first operand is the width. Through [expr]
+  # the subroutine pushed one operand (8.6, -83) or two (9.0, no width).
+  set local [binary format c* {32 10 1}]
+  set global [binary format c* {32 29 1}]
+  list [::tclpdf::sfnt::CffWidth $local 500 0 [list 010] {}] \
+      [::tclpdf::sfnt::CffWidth $global 500 0 {} [list 010]]
+} -result {-91 -91}
+
+test sfnt-8.2 {the top is measured on the subroutine as it is} -body {
+  # vlineto alternates starting vertically: up by the first operand, across
+  # by the second, up by the third - so the top is the first operand, -91.
+  # Through [expr] it was -83 (8.6) or -90 (9.0). The subroutine 1.10 ends
+  # in -91 for vmoveto, and as 1.1 it ended in -90 under both.
+  set local [binary format c* {32 10 7}]
+  set global [binary format c* {32 29 7}]
+  set move [binary format c* {32 10 4}]
+  list [::tclpdf::sfnt::CffTop $local 0 [list 010] {}] \
+      [::tclpdf::sfnt::CffTop $global 0 {} [list 010]] \
+      [::tclpdf::sfnt::CffTop $move 0 [list 1.10] {}]
+} -result {-91.0 -91.0 -91.0}
+
 cleanupTests

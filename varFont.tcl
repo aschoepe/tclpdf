@@ -276,8 +276,12 @@ proc ::tclpdf::varFont::all {parsed coordinates} {
   for {set glyph 0} {$glyph < [llength $loca] - 1} {incr glyph} {
     set start [lindex $loca $glyph]
     set stop [lindex $loca [expr {$glyph + 1}]]
-    set data [expr {$start >= $stop ? {} :
-        [string range $glyf $start [expr {$stop - 1}]]}]
+    # Not a ternary in expr: expr would read glyph bytes such as 0123 as a
+    # number (83 under Tcl 8.6, 123 under 9.0) and 1.10 as 1.1.
+    set data {}
+    if {$start < $stop} {
+      set data [string range $glyf $start [expr {$stop - 1}]]
+    }
     set outline [::tclpdf::glyfOutline parse $data]
     set entry [instance $parsed $glyph $outline $coordinates]
     dict set outlines $glyph [dict get $entry outline]
@@ -1205,4 +1209,4 @@ proc ::tclpdf::varFont::Fixed {value} {
   return [expr {$value / 65536.0}]
 }
 
-package provide tclpdf::varFont 1.4
+package provide tclpdf::varFont 1.5

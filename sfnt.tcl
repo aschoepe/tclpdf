@@ -1581,7 +1581,14 @@ proc ::tclpdf::sfnt::CffWidth {charstring default nominal subrs globalSubrs} {
       }
       10 - 29 {
         set which [expr {$byte == 10 ? {local} : {global}}]
-        set table [expr {$byte == 10 ? $subrs : $globalSubrs}]
+        # Not a ternary in expr: expr would read a list of one charstring such
+        # as 010 as a number (8 under Tcl 8.6, 10 under 9.0) and walk that.
+        # The same holds in [CffTop].
+        if {$byte == 10} {
+          set table $subrs
+        } else {
+          set table $globalSubrs
+        }
         if {!$count || [llength $frames] >= 10} {
           return $default
         }
@@ -1805,7 +1812,11 @@ proc ::tclpdf::sfnt::CffTop {charstring nominal subrs globalSubrs} {
       }
       10 - 29 {
         set which [expr {$byte == 10 ? {local} : {global}}]
-        set table [expr {$byte == 10 ? $subrs : $globalSubrs}]
+        if {$byte == 10} {
+          set table $subrs
+        } else {
+          set table $globalSubrs
+        }
         if {!$count || [llength $frames] >= 10} {
           return $top
         }

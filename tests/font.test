@@ -4567,4 +4567,53 @@ test font-21.3 {a -face that is no face number is refused as FACE} \
 } -result {1 {TCLPDF FONT FACE x}}
 
 
+# Glyph bytes are bytes, and some of them read as a number: a glyph whose
+# record begins "0123" is as possible as any other. The yMax used to be read
+# from bytes that had passed through an [expr] ternary, which handed back 0123
+# as 83 under Tcl 8.6 and as 123 under 9.0 - and a glyph that short has no
+# yMax at all. The face is constructed: one glyph in a glyf table of its own,
+# so that the bytes are exactly the ones under test.
+proc yMaxOf {doc alias bytes} {
+  oo::objdefine $doc export FontGlyphYMax
+  set length [string length $bytes]
+  set parsed [dict create outlines truetype loca [list 0 $length] \
+      tables [list glyf [list 0 $length]] bytes $bytes]
+  return [$doc FontGlyphYMax $alias $parsed 0]
+}
+
+test font-31.1 {glyph bytes that read as an octal number are read as bytes} \
+    -constraints haveFont -body {
+  # yMax is the big-endian word at offset 8: "01", which is 0x3031.
+  set doc [tclpdf new -unit pt]
+  $doc font embed sans $fontRegular
+  set answer [yMaxOf $doc sans 0123456701]
+  $doc destroy
+  set answer
+} -result 12337
+
+test font-31.2 {and so are bytes that read as a decimal or a hex number} \
+    -constraints haveFont -body {
+  # "00" and "1A" at offset 8. Through [expr] both came back as numbers of
+  # fewer than ten digits, 1.1 and 26, and the glyph lost its top.
+  set doc [tclpdf new -unit pt]
+  $doc font embed sans $fontRegular
+  set answers [list [yMaxOf $doc sans 1.10000000] [yMaxOf $doc sans 0x0000001A]]
+  $doc destroy
+  set answers
+} -result {12336 12609}
+
+test font-31.3 {a font without a program is named as its BaseFont is written} -body {
+  # A face whose BaseFont reads as a number. Through [expr] the caller was
+  # told about a font 83 (Tcl 8.6) or 123 (Tcl 9.0) that the file never names.
+  set doc [tclpdf new -unit pt]
+  set writer [$doc writer]
+  foreach {resource face} {F8 0123 F9 010 F10 1.10} {
+    set number [$writer add "<< /Type /Font /Subtype /Type1 /BaseFont /$face >>"]
+    $doc resource Font $resource [$writer ref $number]
+  }
+  set answer [$doc fontsWithoutProgram]
+  $doc destroy
+  set answer
+} -result {010 0123 1.10}
+
 cleanupTests

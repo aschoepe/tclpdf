@@ -836,4 +836,35 @@ test varFont-20.4 {and the top side bearing follows the moved outline} \
   set answers
 } -result {798 1027 776 997}
 
+test varFont-21.1 {glyph bytes that read as a number reach the outline reader
+    as they are} -body {
+  # [all] cuts each glyph out of glyf and hands it to [glyfOutline parse]. The
+  # cut used to pass through an [expr] ternary, which handed back the bytes
+  # 0123 as 83 under Tcl 8.6 and as 123 under 9.0, 1.10 as 1.1 and 0x1A as 26.
+  # The face is constructed - one glyph in a glyf table of its own - and the
+  # reader is replaced by one that records what it was given and stops there,
+  # because bytes like these are no outline and what is under test is the cut.
+  package require tclpdf::glyfOutline
+  set ::glyphSeen {}
+  rename ::tclpdf::glyfOutline::parse ::tclpdf::glyfOutline::parseReal
+  proc ::tclpdf::glyfOutline::parse {data} {
+    lappend ::glyphSeen $data
+    return -code error -errorcode {TCLPDF TEST STOP} "stopped"
+  }
+  set codes {}
+  try {
+    foreach bytes {0123 010 1.10 0x1A} {
+      set length [string length $bytes]
+      set parsed [dict create loca [list 0 $length] \
+          tables [list glyf [list 0 $length]] bytes $bytes]
+      catch {::tclpdf::varFont all $parsed {}} - options
+      lappend codes [dict get $options -errorcode]
+    }
+  } finally {
+    rename ::tclpdf::glyfOutline::parse {}
+    rename ::tclpdf::glyfOutline::parseReal ::tclpdf::glyfOutline::parse
+  }
+  list $::glyphSeen [lsort -unique $codes]
+} -result {{0123 010 1.10 0x1A} {{TCLPDF TEST STOP}}}
+
 cleanupTests

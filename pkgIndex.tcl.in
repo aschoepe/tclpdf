@@ -116,7 +116,7 @@ package ifneeded @PACKAGE_NAME@::type3 1.5 [list source [file join $dir type3.tc
 package ifneeded @PACKAGE_NAME@::ua 1.11 [list source [file join $dir ua.tcl]]
 package ifneeded @PACKAGE_NAME@::timestamp 1.2 [list source [file join $dir timestamp.tcl]]
 package ifneeded @PACKAGE_NAME@::update 1.5 [list source [file join $dir update.tcl]]
-package ifneeded @PACKAGE_NAME@::varFont 1.4 [list source [file join $dir varFont.tcl]]
+package ifneeded @PACKAGE_NAME@::varFont 1.5 [list source [file join $dir varFont.tcl]]
 package ifneeded @PACKAGE_NAME@::viewerPreferences 1.6 [list source [file join $dir viewerPreferences.tcl]]
 package ifneeded @PACKAGE_NAME@::writer 1.6 [list source [file join $dir writer.tcl]]
 package ifneeded @PACKAGE_NAME@::xObject 1.9 [list source [file join $dir xObject.tcl]]
