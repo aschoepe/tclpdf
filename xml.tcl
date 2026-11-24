@@ -30,8 +30,8 @@
 #                 of a million characters, an amplification of 2360. The
 #                 limit is drawn HERE now, before the document is handed to
 #                 either parser - see [Amplification]. The parser below
-#                 cannot expand at all, because it does not know
-#                 user-defined entities, so the check is free for it
+#                 expands declared entities as tdom does since 2026-11-24,
+#                 and the same check is what bounds it
 #
 # The accessors exist so that svg.tcl works against BOTH without knowing
 # which: a tdom node is an object, a node from here is a dictionary, and
@@ -47,13 +47,18 @@
 #   ::tclpdf::xml release $handle  -> a tdom document is NOT freed by itself
 #
 # What the parser below handles is what SVG files contain: elements,
-# attributes, nesting, comments, CDATA, processing instructions and the five
-# predefined entities plus numeric references. What it does not: a document
-# type definition, custom entities, or namespaces as anything other than part
-# of the name. The declarations of the internal subset are READ, though - not
-# to expand them, but to refuse what tdom refuses: a reference to an entity
-# the document never declares, and an "&" that begins no reference at all.
-# Both parsers answer such a document with the same code, see [Refused].
+# attributes, nesting, comments, CDATA, processing instructions, the five
+# predefined entities plus numeric references, and the general entities of
+# the internal subset, expanded where they are referenced as tdom expands
+# them - in text and in attribute values, an entity inside an entity, and an
+# element written in one (see [Unescape] and [Splice]). What it does not: the
+# rest of a document type definition - attribute defaults, parameter
+# entities, the external subset -, or namespaces as anything other than part
+# of the name. What tdom refuses it refuses too, under one code for both, see
+# [Refused]: a reference to an entity the document never declares, an "&"
+# that begins no reference, a character reference to no XML character, an
+# external entity in an attribute value, and anything but white space,
+# comments and processing instructions after the root element.
 #
 
 package require Tcl 8.6.11-
@@ -73,6 +78,15 @@ namespace eval ::tclpdf::xml {
   # process never comes back.
   variable amplificationLimit 100
   variable amplificationFloor 65536
+
+  # How many entities deep one may refer to the next. Both [Expanded] and the
+  # expansion in [Unescape] follow a chain one Tcl frame per entity, and Tcl
+  # stops at a thousand frames: measured 2026-11-24, a chain of 994 failed
+  # with "too many nested evaluations" for both parsers - not a TCLPDF code -
+  # and one of 992 parsed with tdom and failed without it, the built-in
+  # parser starting two frames deeper. Drawn far below, where no real file
+  # goes; the nesting of the classic bomb is ten.
+  variable entityDepth 100
 }
 
 # Which parser is in use - for a caller who wants to know, and for the tests
@@ -148,6 +162,13 @@ proc ::tclpdf::xml::Refused {text message} {
 # replaced by that entity's own length. A definition that refers to itself,
 # directly or round a corner, is a cycle and is refused as one - no depth of
 # recursion is enough for it.
+#
+# The literal text is the REPLACEMENT text, with its character references
+# resolved as they are at the declaration ([Replacement]): "&#38;e;" is a
+# reference to e once declared. Until 2026-11-24 this check read the literal
+# as written and saw no reference in it, so a bomb spelled that way passed -
+# tdom's expat then stopped it at its own limit, past eight megabytes, and
+# answered with nothing a caller could trap.
 proc ::tclpdf::xml::Amplification {text} {
   variable amplificationLimit
   variable amplificationFloor
@@ -181,8 +202,10 @@ proc ::tclpdf::xml::Amplification {text} {
 
 # What the document type declaration says about entities, as a dictionary:
 #
-#   internal  the general entities of the internal subset, name -> literal
+#   internal  the general entities of the internal subset, name ->
+#             replacement text ([Replacement])
 #   external  the names declared as external entities, SYSTEM or PUBLIC
+#   unparsed  those of them that are unparsed, NDATA
 #   open      1 where a reference to an entity declared nowhere is still
 #             well formed
 #
@@ -198,7 +221,8 @@ proc ::tclpdf::xml::Amplification {text} {
 # one reading of the declaration for both, so that the two cannot disagree
 # about which entities a document has.
 proc ::tclpdf::xml::Entities {text} {
-  set result [dict create internal [dict create] external {} open 0]
+  set result [dict create internal [dict create] external {} unparsed {} \
+      open 0]
   if {![regexp -indices {<!DOCTYPE([^>\[]*)(\[?)} $text -> identifier bracket]} {
     return $result
   }
@@ -210,25 +234,143 @@ proc ::tclpdf::xml::Entities {text} {
       set subset [string range $subset 0 $close-1]
     }
   }
-  foreach {-> name double single} [regexp -all -inline \
-      {<!ENTITY\s+([^\s%>]+)\s+(?:"([^"]*)"|'([^']*)')\s*>} $subset] {
-    # Not a ternary in expr: it would hand back a value such as 010 as 8.
-    if {$double ne {}} {
-      dict set result internal $name $double
-    } else {
-      dict set result internal $name $single
-    }
+  set standalone [regexp \
+      {^﻿?<\?xml\s[^?]*\sstandalone\s*=\s*["']yes["']} $text]
+  # A parameter entity reference that nothing reads may declare anything, so
+  # XML 1.0, 4.1 has a processor that does not read it ignore the entity
+  # declarations after it, unless the document is standalone. Measured
+  # 2026-11-24: tdom expands nothing declared after a "%p;", and does under
+  # standalone="yes".
+  set declarations $subset
+  if {!$standalone && [regexp -indices {%[^\s%;]+;} $subset reference]} {
+    set declarations [string range $subset 0 [lindex $reference 0]-1]
   }
-  foreach {-> name} [regexp -all -inline \
-      {<!ENTITY\s+([^\s%>]+)\s+(?:SYSTEM|PUBLIC)\s} $subset] {
-    dict lappend result external $name
+  # One pass, in the order the declarations are written: where a name is
+  # declared twice, the FIRST declaration is binding, internal or external
+  # (XML 1.0, 4.2). Measured 2026-11-24: tdom expands <!ENTITY n "t1"><!ENTITY
+  # n "t2"> to t1, and the dictionary here used to keep t2.
+  foreach {-> name double single external identifiers} [regexp -all -inline \
+      {<!ENTITY\s+([^\s%>]+)\s+(?:"([^"]*)"\s*>|'([^']*)'\s*>|(SYSTEM|PUBLIC)\s((?:[^>"']|"[^"]*"|'[^']*')*)>)} \
+      $declarations] {
+    if {[dict exists $result internal $name]
+        || $name in [dict get $result external]} {
+      continue
+    }
+    # Not a ternary in expr: it would hand back a value such as 010 as 8.
+    if {$external ne {}} {
+      dict lappend result external $name
+      regsub -all {"[^"]*"|'[^']*'} $identifiers {} keywords
+      if {[regexp {\sNDATA\s} " $keywords "]} {
+        dict lappend result unparsed $name
+      }
+    } elseif {$double ne {}} {
+      dict set result internal $name [Replacement $double]
+    } else {
+      dict set result internal $name [Replacement $single]
+    }
   }
   if {([regexp {^\s+\S+\s+(?:SYSTEM|PUBLIC)\s} \
           [string range $text {*}$identifier]]
         || [regexp {%[^\s%;]+;} $subset])
-      && ![regexp {^﻿?<\?xml\s[^?]*\sstandalone\s*=\s*["']yes["']} \
-          $text]} {
+      && !$standalone} {
     dict set result open 1
+  }
+  return $result
+}
+
+# The replacement text of an internal entity: its literal with the character
+# references resolved, which XML 1.0, 4.5 does when the entity is DECLARED.
+# "&#38;amp;" is declared as "&amp;" and reads as "&" where it is referenced,
+# "&#38;e;" refers to the entity e, "&#60;g/>" is an element; an entity
+# reference in the literal stays as written and is expanded where the entity
+# is used. A character reference to no XML character is refused here, used or
+# not - measured 2026-11-24, tdom refuses <!ENTITY n "&#0;"> before it reads
+# the first element.
+proc ::tclpdf::xml::Replacement {literal} {
+  if {[string first &# $literal] < 0} {
+    return $literal
+  }
+  set result {}
+  set from 0
+  foreach {all hex decimal} [regexp -all -inline -indices \
+      {&#(?:x([0-9A-Fa-f]+)|([0-9]+));} $literal] {
+    lassign $all start end
+    append result [string range $literal $from [expr {$start - 1}]]
+    set from [expr {$end + 1}]
+    if {[lindex $hex 0] >= 0} {
+      append result [Character [string range $literal {*}$hex] x \
+          $literal $start {an entity declaration}]
+    } else {
+      append result [Character [string range $literal {*}$decimal] d \
+          $literal $start {an entity declaration}]
+    }
+  }
+  append result [string range $literal $from end]
+  return $result
+}
+
+# The character a numeric reference names - DIGITS read as hexadecimal (x) or
+# decimal (d) - refused where XML 1.0, 2.2 has no such character: U+0000 and
+# the controls but tab, line feed and carriage return, the surrogates U+D800
+# to U+DFFF, U+FFFE and U+FFFF, and anything past U+10FFFF. Measured
+# 2026-11-24: tdom refuses each as "reference to invalid character number";
+# the parser here wrote U+0000 into the text and answered &#99999999999; with
+# Tcl's own "integer value too large to represent".
+#
+# The digits go through scan, never through expr: a leading zero is decimal
+# under 8.6 as well. More digits than U+10FFFF has are out of range however
+# they are read, and are not handed to scan at all.
+proc ::tclpdf::xml::Character {digits base text start where} {
+  set digits [string trimleft $digits 0]
+  if {$base eq "x"} {
+    set most 6
+  } else {
+    set most 7
+  }
+  set code -1
+  if {$digits eq {}} {
+    set code 0
+  } elseif {[string length $digits] <= $most} {
+    scan $digits %$base code
+  }
+  if {$code in {9 10 13}
+      || ($code >= 0x20 && $code <= 0xD7FF)
+      || ($code >= 0xE000 && $code <= 0xFFFD)
+      || ($code >= 0x10000 && $code <= 0x10FFFF)} {
+    return [format %c $code]
+  }
+  return -code error -errorcode [list TCLPDF XML MALFORMED character] \
+      "tclpdf: XML is not well formed - the reference in $where\
+      \"[Excerpt $text $start]\" names no character XML allows"
+}
+
+# The entities whose replacement text holds markup, directly or through an
+# entity it refers to, round as many corners as there are - [Splice] puts
+# their references in the text into the document itself.
+proc ::tclpdf::xml::Markup {entities} {
+  set internal [dict get $entities internal]
+  set result {}
+  dict for {name replacement} $internal {
+    if {[string first < $replacement] >= 0} {
+      lappend result $name
+    }
+  }
+  set grown [llength $result]
+  while {$grown} {
+    set grown 0
+    dict for {name replacement} $internal {
+      if {$name in $result} {
+        continue
+      }
+      foreach {-> reference} [regexp -all -inline \
+          {&([^\s&;<>"']+);} $replacement] {
+        if {$reference in $result} {
+          lappend result $name
+          set grown 1
+          break
+        }
+      }
+    }
   }
   return $result
 }
@@ -236,6 +378,7 @@ proc ::tclpdf::xml::Entities {text} {
 # One entity's expanded length, memoised, with the entities open on the way
 # down as the cycle guard.
 proc ::tclpdf::xml::Expanded {name definitions lengthsVariable open budget} {
+  variable entityDepth
   upvar 1 $lengthsVariable lengths
   if {[dict exists $lengths $name]} {
     return [dict get $lengths $name]
@@ -247,6 +390,12 @@ proc ::tclpdf::xml::Expanded {name definitions lengthsVariable open budget} {
   }
   if {![dict exists $definitions $name]} {
     return 0
+  }
+  if {[dict size $open] >= $entityDepth} {
+    return -code error -errorcode [list TCLPDF XML ENTITY depth] \
+        "tclpdf: the entity \"&$name;\" is reached through more than\
+        $entityDepth entities, each referring to the next - deeper than\
+        this package follows"
   }
   dict set open $name 1
   set literal [dict get $definitions $name]
@@ -441,20 +590,10 @@ proc ::tclpdf::xml::Parse {text} {
   # Read before the doctype is dropped below: which entity references the
   # document may make is said there and nowhere else.
   set entities [Entities $text]
-  # Comments, processing instructions and the doctype carry nothing we want,
-  # and dropping them first means the element walk has three cases fewer.
-  regsub -all {<!--.*?-->} $text {} text
-  regsub -all {<\?.*?\?>} $text {} text
-  regsub -all {<!DOCTYPE[^>\[]*(\[[^\]]*\])?[^>]*>} $text {} text
-  # CDATA is character data with markup switched off. Unwrapping it plainly
-  # would hand its content to the element walk below - a CDATA holding
-  # "<nicht>" then reads as an opening tag and the document stops being well
-  # formed. So the two significant characters are escaped instead, and the
-  # ordinary entity handling puts them back.
-  while {[regexp -indices {<!\[CDATA\[(.*?)\]\]>} $text match inner]} {
-    set content [string map {& &amp; < &lt;} [string range $text {*}$inner]]
-    set text [string replace $text {*}$match $content]
-  }
+  set markup [Markup $entities]
+  # Each declared entity expanded once per kind of value, see [Unescape].
+  set expansions [dict create]
+  set text [Strip $text]
 
   set stack {}
   set root {}
@@ -463,9 +602,15 @@ proc ::tclpdf::xml::Parse {text} {
       $text match closing name attributes empty]} {
     lassign $match matchStart matchEnd
     set before [string range $text $position $matchStart-1]
+    if {[llength $stack] && [llength $markup]
+        && [Splice text $position $before $entities $markup]} {
+      # The replacement text stands in the document in place of its
+      # reference now, and the walk reads on from the same place.
+      continue
+    }
     if {[llength $stack] && [string trim $before] ne {}} {
       set top [lindex $stack end]
-      set chunk [Unescape $before $entities {the text}]
+      set chunk [Unescape $before $entities text {the text} expansions]
       dict append top text $chunk
       # And the same chunk in the ORDER list, which is what [nodes] reads:
       # where the character data of an element stands relative to its
@@ -494,16 +639,20 @@ proc ::tclpdf::xml::Parse {text} {
         dict lappend parent children $node
         lset stack end $parent
       } else {
-        set root $node
+        # The root is complete, and only white space may follow it here.
+        Trailing $text $position $elementName
+        return $node
       }
       continue
     }
 
     set node [dict create name $elementName \
-        attributes [Attributes [string range $text {*}$attributes] $entities] \
+        attributes [Attributes [string range $text {*}$attributes] \
+            $entities expansions] \
         text {} children {} order {}]
     if {$isEmpty} {
       if {![llength $stack]} {
+        Trailing $text $position $elementName
         return $node
       }
       set parent [lindex $stack end]
@@ -528,7 +677,74 @@ proc ::tclpdf::xml::Parse {text} {
   return $root
 }
 
-proc ::tclpdf::xml::Attributes {text entities} {
+# What follows the root element, from POSITION on. XML 1.0, 2.1 lets a
+# document end in white space, comments and processing instructions, and the
+# last two are gone by the time this is asked ([Parse] drops them first).
+# Measured 2026-11-24: tdom refuses "<a/>x" and "<a/><b/>" as "junk after
+# document element"; the parser here took both, the second by answering with
+# <b> as the root.
+proc ::tclpdf::xml::Trailing {text position name} {
+  set rest [string trimleft [string range $text $position end] " \t\r\n"]
+  if {$rest eq {}} {
+    return
+  }
+  return -code error -errorcode [list TCLPDF XML MALFORMED trailing] \
+      "tclpdf: XML is not well formed - \"[string map {\n { } \r { } \t { }} \
+      [string range $rest 0 24]]\" follows the root element \"$name\",\
+      where only white space, comments and processing instructions may"
+}
+
+# The first reference in BEFORE - the character data that starts at POSITION
+# in the document - to an entity of MARKUP, replaced in the document by that
+# entity's replacement text: 1 where one was replaced, 0 where none is there.
+#
+# XML 1.0, 4.4.2 includes the replacement text where the reference stands,
+# and in content it is read as content: <!ENTITY sign "<g>...</g>"> makes an
+# element. Measured 2026-11-24, tdom made one and the parser here left
+# "&sign;" in the text. Put into the document and walked again, it is an
+# element here too - one reference at a time, so that a reference inside the
+# replacement text is met by the walk like any other. Only an entity that
+# holds markup takes this road; every other one is expanded by [Unescape]
+# without a copy of the document. Neither road loops: [Amplification] has
+# refused every cycle and bounded every expansion.
+proc ::tclpdf::xml::Splice {textVariable position before entities markup} {
+  upvar 1 $textVariable text
+  foreach {all reference} [regexp -all -inline -indices \
+      {&([^\s&;<>"']+);} $before] {
+    set name [string range $before {*}$reference]
+    if {$name in $markup} {
+      set text [string replace $text \
+          [expr {$position + [lindex $all 0]}] \
+          [expr {$position + [lindex $all 1]}] \
+          [Strip [dict get $entities internal $name]]]
+      return 1
+    }
+  }
+  return 0
+}
+
+# Comments, processing instructions and the doctype carry nothing we want,
+# and dropping them first means the element walk has three cases fewer. Asked
+# of the document by [Parse] and of a replacement text by [Splice], which may
+# hold the same.
+proc ::tclpdf::xml::Strip {text} {
+  regsub -all {<!--.*?-->} $text {} text
+  regsub -all {<\?.*?\?>} $text {} text
+  regsub -all {<!DOCTYPE[^>\[]*(\[[^\]]*\])?[^>]*>} $text {} text
+  # CDATA is character data with markup switched off. Unwrapping it plainly
+  # would hand its content to the element walk below - a CDATA holding
+  # "<nicht>" then reads as an opening tag and the document stops being well
+  # formed. So the two significant characters are escaped instead, and the
+  # ordinary entity handling puts them back.
+  while {[regexp -indices {<!\[CDATA\[(.*?)\]\]>} $text match inner]} {
+    set content [string map {& &amp; < &lt;} [string range $text {*}$inner]]
+    set text [string replace $text {*}$match $content]
+  }
+  return $text
+}
+
+proc ::tclpdf::xml::Attributes {text entities expansionsVariable} {
+  upvar 1 $expansionsVariable expansions
   set result {}
   foreach {-> name value quoted} [regexp -all -inline \
       {([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')} $text] {
@@ -537,26 +753,49 @@ proc ::tclpdf::xml::Attributes {text entities} {
     if {$value eq {}} {
       set value $quoted
     }
-    dict set result $name [Unescape $value $entities "the attribute $name"]
+    dict set result $name \
+        [Unescape $value $entities attribute "the attribute $name" expansions]
   }
   return $result
 }
 
-# The five predefined entities and numeric references, each replaced by its
-# character. A reference to an entity the document declares is left as it
-# stands - this parser does not expand one, see the head of the file - and so
-# is one to an entity declared nowhere where XML allows that (see [Entities]).
+# The references of a text or an attribute value, each replaced by what it
+# stands for. CONTEXT is "text" or "attribute", WHERE names the value for a
+# message, EXPANSIONS is the caller's dictionary of the entities expanded so
+# far.
 #
-# EVERYTHING ELSE IS REFUSED, as tdom refuses it: an "&" that begins no
-# reference - "x & y", "&amp" without its semicolon, "&#;" - and "&name;" for
-# an entity the document does not declare (XML 1.0, 2.4 and 4.1, WFC "Entity
-# Declared"). Both used to be accepted here and left in the text, so that the
-# same file was drawn without tdom and refused with it - measured 2026-11-24.
-# WHERE says which kind of value it was, for the message.
-proc ::tclpdf::xml::Unescape {text entities where} {
+#   &lt; &gt; &amp; &quot; &apos;  the character
+#   &#65; &#x41;                   the character, where XML has one
+#                                  ([Character])
+#   &name; of the internal subset  its replacement text, read in turn as the
+#                                  same kind of value - "&amp;" in it is an
+#                                  ampersand, "&other;" is expanded as well
+#   &name; declared external       refused in an attribute value (XML 1.0,
+#                                  3.1, WFC "No External Entity References");
+#                                  in text nothing, since nothing here fetches
+#                                  a file
+#   &name; declared nowhere        nothing where an external subset may
+#                                  declare it ([Entities], OPEN), refused
+#                                  otherwise (4.1, WFC "Entity Declared")
+#   any other "&"                  refused - "x & y", "&amp" without its
+#                                  semicolon, "&#;"
+#
+# Every line is what tdom 0.9.7 answers, measured 2026-11-24. Until that day
+# the parser here left a declared entity, an external one and an undeclared
+# one under an open doctype standing as written, and took "&#0;" for a
+# character. A replacement text that holds "<" is refused in an attribute
+# value (3.1, WFC "No < in Attribute Values"), as tdom refuses it; in text,
+# [Splice] has put it into the document before this is asked.
+#
+# The recursion ends and its output is bounded: [Amplification] has measured
+# every expansion and refused every cycle before the parse began. Each entity
+# is expanded once per CONTEXT and then taken from EXPANSIONS, so that a
+# thousand references to one entity cost one expansion.
+proc ::tclpdf::xml::Unescape {text entities context where expansionsVariable} {
   if {[string first & $text] < 0} {
     return $text
   }
+  upvar 1 $expansionsVariable expansions
   # One pass over the ampersands, each replaced by its character where it
   # begins a reference; the text between them is copied, never evaluated. No
   # subst here: it would run any bracketed command the document carries. The
@@ -575,17 +814,40 @@ proc ::tclpdf::xml::Unescape {text entities where} {
     if {$name in {lt gt quot apos amp}} {
       append result [dict get {lt < gt > quot \" apos ' amp &} $name]
     } elseif {[regexp {^#x([0-9A-Fa-f]+)$} $name -> digits]} {
-      scan $digits %x code
-      append result [format %c $code]
+      append result [Character $digits x $text $start $where]
     } elseif {[regexp {^#([0-9]+)$} $name -> digits]} {
-      scan $digits %d code
-      append result [format %c $code]
+      append result [Character $digits d $text $start $where]
     } elseif {[string index $name 0] eq "#"} {
       Unreferenced $text $start $where
-    } elseif {[dict exists [dict get $entities internal] $name]
-        || $name in [dict get $entities external]
-        || [dict get $entities open]} {
-      append result [string range $text {*}$all]
+    } elseif {[dict exists $entities internal $name]} {
+      set key [list $context $name]
+      if {![dict exists $expansions $key]} {
+        set replacement [dict get $entities internal $name]
+        if {$context eq "attribute" && [string first < $replacement] >= 0} {
+          return -code error -errorcode [list TCLPDF XML MALFORMED markup] \
+              "tclpdf: XML is not well formed - the entity \"&$name;\" in\
+              $where \"[Excerpt $text $start]\" holds markup, which an\
+              attribute value cannot"
+        }
+        dict set expansions $key \
+            [Unescape $replacement $entities $context $where expansions]
+      }
+      append result [dict get $expansions $key]
+    } elseif {$name in [dict get $entities external]} {
+      if {$context eq "attribute"} {
+        return -code error -errorcode [list TCLPDF XML MALFORMED external] \
+            "tclpdf: XML is not well formed - the entity \"&$name;\" in\
+            $where \"[Excerpt $text $start]\" is an external entity, which\
+            an attribute value cannot refer to"
+      }
+      if {$name in [dict get $entities unparsed]} {
+        return -code error -errorcode [list TCLPDF XML MALFORMED external] \
+            "tclpdf: XML is not well formed - the entity \"&$name;\" in\
+            $where \"[Excerpt $text $start]\" is an unparsed entity, which\
+            the text cannot refer to"
+      }
+    } elseif {[dict get $entities open]} {
+      # Declared, perhaps, where nothing here reads: nothing, as with tdom.
     } else {
       return -code error -errorcode [list TCLPDF XML MALFORMED reference] \
           "tclpdf: XML is not well formed - the entity \"&$name;\" in\

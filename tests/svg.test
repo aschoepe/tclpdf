@@ -2026,9 +2026,8 @@ test svg-malformed-40.5 {an element never closed is refused alike by both parser
 
 test svg-malformed-40.6 {the references XML allows are still taken, by both parsers} -constraints haveTdom -body {
   # The mutation reference for 40.2 to 40.4: the same places, a reference
-  # that is one. The declared entity is only ASKED here, not read back - tdom
-  # expands it and the built-in parser leaves it as it stands (xml.tcl, head
-  # of the file), which is the one difference left between the two.
+  # that is one. The declared entity is only ASKED here; svg-malformed-40.8
+  # reads it back, from both parsers.
   set markup "<!DOCTYPE svg \[<!ENTITY hallo \"Welt\">\]><svg\
       xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"\
       id=\"&amp;&#65;&#x41;\" class=\"&hallo;\"><text>&amp;&#65;&#x41;\
@@ -2065,6 +2064,184 @@ test svg-malformed-40.7 {an undeclared entity is well formed where an external s
   }
   set answer
 } -result {{{no refusal}} {{no refusal}} {{no refusal}} {{TCLPDF XML MALFORMED reference}} {{TCLPDF XML MALFORMED reference}}}
+
+# -- what the built-in parser read otherwise -------------------------------
+#
+# Measured 2026-11-24 with tdom 0.9.7: a declared entity was expanded by tdom
+# and left standing as "&name;" by the built-in parser; a character reference
+# to no XML character, an external entity in an attribute value and anything
+# after the root element were refused by tdom and taken by the built-in
+# parser. As above, each test runs both parsers over the same markup, so that
+# a difference between them is a difference in the result.
+
+test svg-malformed-40.8 {a declared entity is expanded alike by both parsers, in the text and in an attribute} -constraints haveTdom -body {
+  set markup {<!DOCTYPE svg [<!ENTITY hallo "Welt">]><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 60" id="&hallo;"><text x="0" y="20" font-size="16">&hallo;</text></svg>}
+  svgBothParsers {
+    set root [::tclpdf::xml parse $markup]
+    set answer [list [::tclpdf::xml attribute $root id] \
+        [::tclpdf::xml text [lindex [::tclpdf::xml children $root] 0]]]
+    ::tclpdf::xml release $root
+    set doc [tclpdf new -compress 0]
+    $doc page add
+    $doc svg -data $markup -at {10 10} -width 50
+    lappend answer [join [::tclpdfTest::shows [::tclpdfTest::content $doc]] {}]
+    $doc destroy
+    set answer
+  }
+} -result {{Welt Welt (Welt)}}
+
+test svg-malformed-40.9 {an entity inside an entity, and character references resolved where the entity is declared} -constraints haveTdom -body {
+  # XML 1.0, 4.5: "&#38;#65;" is declared as "&#65;" and read as "A" where it
+  # is referenced; "&amp;" in a replacement text is an ampersand; and of two
+  # declarations of one name the first binds (4.2).
+  set markup {<!DOCTYPE a [<!ENTITY outer "&lt;&inner;&gt;"><!ENTITY inner "M&amp;&#38;#65;"><!ENTITY inner "lost">]><a b="&outer;">&outer;</a>}
+  svgBothParsers {
+    set root [::tclpdf::xml parse $markup]
+    set answer [list [::tclpdf::xml attribute $root b] [::tclpdf::xml text $root]]
+    ::tclpdf::xml release $root
+    set answer
+  }
+} -result {{<M&A> <M&A>}}
+
+test svg-malformed-40.10 {an entity nothing here reads stands for nothing, in both parsers} -constraints haveTdom -body {
+  # Undeclared under an external subset, external in the text, and declared
+  # after a parameter entity reference that is not read - which XML 1.0, 4.1
+  # has ignored unless the document is standalone, the last case.
+  set answer {}
+  foreach markup {
+    {<!DOCTYPE a PUBLIC "-//W3C//DTD SVG 1.1//EN" "svg11.dtd"><a b="1&e;2">1&e;2</a>}
+    {<!DOCTYPE a [<!ENTITY e SYSTEM "e.txt">]><a>1&e;2</a>}
+    {<!DOCTYPE a [<!ENTITY % p "x"> %p; <!ENTITY n "text">]><a b="1&n;2">1&n;2</a>}
+    {<?xml version="1.0" standalone="yes"?><!DOCTYPE a [<!ENTITY % p "x"> %p; <!ENTITY n "text">]><a b="1&n;2">1&n;2</a>}
+  } {
+    lappend answer [svgBothParsers {
+      set root [::tclpdf::xml parse $markup]
+      set result [list [::tclpdf::xml attribute $root b -] [::tclpdf::xml text $root]]
+      ::tclpdf::xml release $root
+      set result
+    }]
+  }
+  set answer
+} -result {{{12 12}} {{- 12}} {{12 12}} {{1text2 1text2}}}
+
+test svg-malformed-40.11 {an element written in an entity is an element, and refused in an attribute} -constraints haveTdom -body {
+  set markup {<!DOCTYPE svg [<!ENTITY b "<tspan fill='&c;'><!-- note -->B</tspan>"><!ENTITY c "red">]><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text>A&b;C</text></svg>}
+  set inText [svgBothParsers {
+    set root [::tclpdf::xml parse $markup]
+    set answer {}
+    foreach part [::tclpdf::xml nodes [lindex [::tclpdf::xml children $root] 0]] {
+      lassign $part what value
+      if {$what eq "text"} {
+        lappend answer $value
+      } else {
+        lappend answer [::tclpdf::xml name $value] \
+            [::tclpdf::xml attribute $value fill] [::tclpdf::xml text $value]
+      }
+    }
+    ::tclpdf::xml release $root
+    set answer
+  }]
+  set inAttribute [svgBothParsers {::tclpdfTest::refusalCode {
+    ::tclpdf::xml release [::tclpdf::xml parse \
+        {<!DOCTYPE a [<!ENTITY b "<tspan/>">]><a b="&b;"/>}]
+  }}]
+  list $inText $inAttribute
+} -result {{{A tspan red B C}} {{TCLPDF XML MALFORMED markup}}}
+
+test svg-malformed-40.12 {a cycle stays a cycle and a bomb a bomb, also behind a character reference} -constraints haveTdom -body {
+  # "&#38;n;" is a reference to n once declared. The amplification check read
+  # the literal as written until 2026-11-24 and did not see it, so the bomb
+  # below reached tdom, whose expat stopped it with a message and no code.
+  set bomb {<!DOCTYPE a [<!ENTITY e0 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">}
+  for {set level 1} {$level <= 6} {incr level} {
+    append bomb "<!ENTITY e$level \"[string repeat "&#38;e[expr {$level - 1}];" 10]\">"
+  }
+  append bomb {]><a>&e6;</a>}
+  set answer {}
+  foreach markup [list \
+      {<!DOCTYPE a [<!ENTITY n "x&m;"><!ENTITY m "y&n;">]><a>&n;</a>} \
+      {<!DOCTYPE a [<!ENTITY n "&#38;n;">]><a>&n;</a>} \
+      $bomb] {
+    lappend answer [svgBothParsers {::tclpdfTest::refusalCode {
+      ::tclpdf::xml release [::tclpdf::xml parse $markup]
+    }}]
+  }
+  set answer
+} -result {{{TCLPDF XML ENTITY cycle}} {{TCLPDF XML ENTITY cycle}} {{TCLPDF XML ENTITY expansion}}}
+
+test svg-malformed-40.13 {a reference to U+0000 is refused alike by both parsers} -constraints haveTdom -body {
+  svgMalformed {<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text>x&#0;</text></svg>} x&
+} -result {{tdom {TCLPDF XML MALFORMED character} {TCLPDF SVG XML MALFORMED character} {TCLPDF SVG XML MALFORMED character} 111111 {}} {tclpdf {TCLPDF XML MALFORMED character} {TCLPDF SVG XML MALFORMED character} {TCLPDF SVG XML MALFORMED character} 111111 {}}}
+
+test svg-malformed-40.14 {a reference to no XML character is refused, one to a character is taken} -constraints haveTdom -body {
+  # XML 1.0, 2.2 Char: the surrogates, U+FFFE and U+FFFF, past U+10FFFF and
+  # the controls but tab, line feed and carriage return are no characters;
+  # "&#99999999999;" used to end in Tcl's own "integer value too large". The
+  # last one stands in an entity declaration that nothing references.
+  set answer {}
+  foreach markup {
+    {<a b="&#xD800;"/>} {<a b="&#xDFFF;"/>} {<a b="&#xFFFE;"/>}
+    {<a b="&#xFFFF;"/>} {<a b="&#x110000;"/>} {<a b="&#99999999999;"/>}
+    {<a b="&#x1;"/>} {<a b="&#x9;"/>} {<a b="&#xFFFD;"/>} {<a b="&#x10000;"/>}
+    {<!DOCTYPE a [<!ENTITY n "&#0;">]><a/>}
+  } {
+    lappend answer [svgBothParsers {::tclpdfTest::refusalCode {
+      ::tclpdf::xml release [::tclpdf::xml parse $markup]
+    }}]
+  }
+  set answer
+} -result {{{TCLPDF XML MALFORMED character}} {{TCLPDF XML MALFORMED character}} {{TCLPDF XML MALFORMED character}} {{TCLPDF XML MALFORMED character}} {{TCLPDF XML MALFORMED character}} {{TCLPDF XML MALFORMED character}} {{TCLPDF XML MALFORMED character}} {{no refusal}} {{no refusal}} {{no refusal}} {{TCLPDF XML MALFORMED character}}}
+
+test svg-malformed-40.15 {an external entity in an attribute is refused alike by both parsers} -constraints haveTdom -body {
+  svgMalformed {<!DOCTYPE svg [<!ENTITY ext SYSTEM "ext.txt">]><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" id="1&ext;"/>} 1&
+} -result {{tdom {TCLPDF XML MALFORMED external} {TCLPDF SVG XML MALFORMED external} {TCLPDF SVG XML MALFORMED external} 111111 {}} {tclpdf {TCLPDF XML MALFORMED external} {TCLPDF SVG XML MALFORMED external} {TCLPDF SVG XML MALFORMED external} 111111 {}}}
+
+test svg-malformed-40.16 {an external entity reached through an internal one, and an unparsed one in the text} -constraints haveTdom -body {
+  set answer {}
+  foreach markup {
+    {<!DOCTYPE a [<!ENTITY ext SYSTEM "ext.txt"><!ENTITY n "&ext;">]><a b="&n;"/>}
+    {<!DOCTYPE a [<!ENTITY g SYSTEM "g.gif" NDATA gif>]><a>&g;</a>}
+  } {
+    lappend answer [svgBothParsers {::tclpdfTest::refusalCode {
+      ::tclpdf::xml release [::tclpdf::xml parse $markup]
+    }}]
+  }
+  set answer
+} -result {{{TCLPDF XML MALFORMED external}} {{TCLPDF XML MALFORMED external}}}
+
+test svg-malformed-40.17 {text after the root element is refused alike by both parsers} -constraints haveTdom -body {
+  svgMalformed {<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"/>junk} {}
+} -result {{tdom {TCLPDF XML MALFORMED trailing} {TCLPDF SVG XML MALFORMED trailing} {TCLPDF SVG XML MALFORMED trailing} 111111 {}} {tclpdf {TCLPDF XML MALFORMED trailing} {TCLPDF SVG XML MALFORMED trailing} {TCLPDF SVG XML MALFORMED trailing} 111111 {}}}
+
+test svg-malformed-40.18 {after the root only white space, comments and processing instructions} -constraints haveTdom -body {
+  # The second case was answered with <b> as the root.
+  set answer {}
+  foreach markup [list {<a/><b/>} {<a></a><b></b>} {<a/>&#32;} \
+      {<a/><![CDATA[x]]>} {<a/><!-- c -->} "<a/>\n" "<a/>\n<?pi x?>\n"] {
+    lappend answer [svgBothParsers {::tclpdfTest::refusalCode {
+      ::tclpdf::xml release [::tclpdf::xml parse $markup]
+    }}]
+  }
+  set answer
+} -result {{{TCLPDF XML MALFORMED trailing}} {{TCLPDF XML MALFORMED trailing}} {{TCLPDF XML MALFORMED trailing}} {{TCLPDF XML MALFORMED trailing}} {{no refusal}} {{no refusal}} {{no refusal}}}
+
+test svg-malformed-40.19 {a chain of entities deeper than a hundred is refused alike, before either parser runs} -constraints haveTdom -body {
+  # Measured 2026-11-24: a chain of 994 ended in Tcl's "too many nested
+  # evaluations" for both parsers, and one of 992 parsed with tdom and failed
+  # without it. A hundred entities deep is taken, the 101st is refused.
+  set answer {}
+  foreach depth {100 101 3000} {
+    set markup "<!DOCTYPE a \["
+    for {set level 1} {$level < $depth} {incr level} {
+      append markup "<!ENTITY e$level \"&e[expr {$level + 1}];\">"
+    }
+    append markup "<!ENTITY e$depth \"x\">\]><a b=\"&e1;\">&e1;</a>"
+    lappend answer [svgBothParsers {::tclpdfTest::refusalCode {
+      ::tclpdf::xml release [::tclpdf::xml parse $markup]
+    }}]
+  }
+  set answer
+} -result {{{no refusal}} {{TCLPDF XML ENTITY depth}} {{TCLPDF XML ENTITY depth}}}
 
 # -- a colour component that is no number ----------------------------------
 #

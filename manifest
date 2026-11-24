@@ -1,5 +1,5 @@
-C Make\sboth\sXML\sparsers\srefuse\sthe\ssame\sfiles\sunder\sthe\ssame\serror\scodes\n\n-\sxml:\sa\stdom\sparse\serror\sis\sreported\sas\sTCLPDF\sXML\sMALFORMED\swith\sthe\sclass\sthe\sbuilt-in\sparser\sgives\sthe\ssame\sdocument,\sor\ssyntax\swhen\sonly\stdom\sobjects\n-\sxml:\sthe\sbuilt-in\sparser\srefuses\sa\sbare\sampersand\sas\sMALFORMED\sampersand\sand\san\sundeclared\sentity\sreference\sas\sMALFORMED\sreference,\sin\stext\sand\sin\sattributes;\sa\sdocument\swith\san\sexternal\ssubset\sor\sa\sparameter\sentity\skeeps\sundeclared\sreferences,\sas\stdom\sdoes,\sunless\sit\sis\sstandalone\n-\sxml:\sthe\sdoctype\sis\sread\sonce\sby\sEntities,\sfor\sthe\samplification\scheck\sand\sfor\sthe\sparser\n-\ssvg:\ssvg\sand\ssvg\ssize\sparse\sthrough\sone\smethod,\sSvgParse,\swhich\smaps\sXML\sMALFORMED\sand\sXML\sEMPTY\sto\sTCLPDF\sSVG\sXML\sMALFORMED\sand\sleaves\sXML\sENTITY\scodes\sas\sthey\sare\n-\smanual:\sboth\sparsers\sanswer\sthe\ssame\sfile\sthe\ssame\sway\n-\stests:\ssvg-malformed-40.2\sto\s40.7;\ssvg-1.13\sand\sfileDecimal-7.1\sfollow\sthe\snew\sbehaviour
-D 2026-11-24T21:27:11.868
+C Bring\sthe\sbuilt-in\sXML\sparser\slevel\swith\stdom\n\n-\sxml:\sthe\sentities\sa\sdocument\sdeclares\sare\sexpanded\sin\stext\sand\sin\sattributes,\snested,\seach\sonce;\smarkup\sfrom\san\sentity\sbecomes\san\selement\sin\stext\sand\sis\srefused\sin\san\sattribute\sas\sMALFORMED\smarkup\n-\sxml:\sa\scharacter\sreference\soutside\sthe\sXML\scharacter\srange\sis\srefused\sas\sMALFORMED\scharacter,\san\sexternal\sentity\sin\san\sattribute\sor\san\sunparsed\sone\sin\stext\sas\sMALFORMED\sexternal,\scontent\safter\sthe\sroot\selement\sas\sMALFORMED\strailing\n-\sxml:\sthe\samplification\scheck\sreads\sentity\stexts\swith\stheir\scharacter\sreferences\sresolved,\sand\srefuses\sa\schain\sdeeper\sthan\sentityDepth\sas\sTCLPDF\sXML\sENTITY\sdepth\n-\smanual:\sthe\sentity\schecks\shold\sfor\sboth\sparsers;\sthe\sdepth\sclass\n-\stests:\ssvg-malformed-40.8\sto\s40.19
+D 2026-11-24T21:53:38.440
 F Makefile.in d91f5766c7267c53141b153feddddf9197a5bf92cdf5ab10a12126ba0e1fc13d
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -42,7 +42,7 @@ F doc/claude/skills/tclpdf-tcl/reference/11-encryption-signatures.md 7bd44de0356
 F doc/claude/skills/tclpdf-tcl/reference/12-import-update-info.md 104bdf7b603f2632a1cd17a5fd71717aeb4489ef7bd0e1b3eae5f24796bb72a0
 F doc/claude/skills/tclpdf-tcl/reference/13-form-fields.md d6dd58f4f6d4f250c4875e5bc13593cefa9625bc5d0f0773f70fbe5c79d34686
 F doc/tclpdf-default.html b543496816ce1ebbc250ce38eb1672a0a58cee20f635b1bd0d739a651a4cbe55
-F doc/tclpdf.md 1d679dc6c05879d2ba5ea19fc9f26c40f39642609213be48e8af18c9593ebebe
+F doc/tclpdf.md 5a94110cd5c9987e556e967f7f242b351e8c0fcd2a9657e19272071cb423da34
 F document.tcl 6f254e4aae04f01b0f97be550590dccf49cb38b41c93e2f1c0c114c0ac49e377
 F encrypt.tcl 8137afb09bf8f0548ab8220feae2ee49980eedf1b47c1eba8226cb91f4dc6662
 F event.tcl bf7548f7b6c7e92f70b14294d5cc7bae89c00dbfbe5afd51e5d7c17739f55b6a
@@ -469,7 +469,7 @@ F tests/shaping.test 2782df5ad77b4d09adaa5ce270cb511b84b2f42702daed2e31517f4e845
 F tests/sign.test 8be70999a5229cd06a4f52853465d35bb4554c26e7777651c498a84eacbdcd48
 F tests/structure.test d7467020023eecec7f821f3bf337161ef8ba592a93a98a07cc3094dfad2fa70a
 F tests/subset.test c7dde96f5d7cc81fdf992519335c2e6cb9059e0d1cad867fac7583e27226721b
-F tests/svg.test 75552653aee712d30547f30f487a9012498faadc4fd7bd6d885a4ee045da420f
+F tests/svg.test 0166436380401ab8213044659376d46c43d85510a993d20f49ae2a70b1d6660c
 F tests/svgClip.test 9b371c204d320710241d043ee4b6507f7b4009de2d6185087516376f2a88dfc5
 F tests/table.test 191ed38722067c37bcce0862722d6360da693ce9852b11b28c5248e8c1ec8c41
 F tests/text.test 48a08bbc690c666ba1f676caecfcec366c20af891a0c0f8be44e022a75498e0b
@@ -521,11 +521,11 @@ F varFont.tcl 97635f5c8678908ab65628bbdaf126cc2c68a6339a277ddb72707266dd604404
 F viewerPreferences.tcl afdc8f5f88e46c8d790310d5f5b24468725804d421883a9260c8fb5bd02a0c98
 F writer.tcl 8811bb2b6cb9e4742c6bf5a713089017e8778fa41356537a7b0787ad35b18835
 F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
-F xml.tcl ab03b57f66bbbd38be26e98990cd88c6a262d54d773cd53c748d555fd6d2b942
+F xml.tcl 55716272684459bd4c9697bb79462b208da65a0badb9f5bc0fffc71a3d405eb5
 F xmp.tcl 9c5e5301ec72953c3067176bb46d984af1a52c1a7f53cff87d07f843d79fded1
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 438ab97090446ae1c4f911cfe3730277ce022397c780a42b7130897dfac95fac
-R 28945eccf5e86d25e9a2d5d5f6a173f2
+P 2ab671865676a98781125a0d5003e48859e295929ccaf5f50112c9dd609b415c
+R 6fb81325fde47a784785db2aa4c2c0e5
 U alex
-Z 1b5852c9f7e04d6d74138a6e1b70d762
+Z 613a1e6e6107e18695843d2d49cb36af
 # Remove this line to create a well-formed Fossil manifest.
