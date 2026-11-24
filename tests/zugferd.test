@@ -1549,10 +1549,6 @@ test zugferd-13.7 {the schema procs answer the invoice namespace without a famil
       [regexp {xmlns:fx="urn:factur-x:pdfa:CrossIndustryDocument:1p0#"} [::tclpdf::zugferd properties order-x.xml ORDER 1.0 BASIC order]]
 } -result {1 1 1 4 1 1 1}
 
-foreach path $orderXmlFiles {
-  file delete -force $path
-}
-
 test zugferd-14.1 {UTF-16 XML is refused for its encoding, not for a missing BT-24} -body {
   # A UTF-16 file can never match the ASCII regexp that reads BT-24, and the
   # refusal it got blamed the content for the encoding. The BOM says what is
@@ -1883,5 +1879,13 @@ test zugferd-19.1 {a caller's packet without the fx description refuses the writ
   }
   set out
 } -result {1 {TCLPDF XMP CALLER} 1 0 factur-x.xml 1 {TCLPDF XMP CALLER} 1 0 factur-x.xml}
+
+# After the LAST test that writes one: until 2026-11-24 this loop stood after
+# zugferd-13.x, and zugferd-17.4 wrote another order-x.xml behind it that
+# nothing removed - a stray in whatever directory the suite was started from,
+# and once checked in by accident (c2e7f4d8b7).
+foreach path $orderXmlFiles {
+  file delete -force $path
+}
 
 cleanupTests

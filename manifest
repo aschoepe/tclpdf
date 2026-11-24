@@ -1,5 +1,5 @@
-C Run\sa\s-script\sbody\sin\sthe\scaller's\sframe\son\sthe\sfirst\scall\sof\sa\sprocess\n\n-\sdocument:\sunknown\stailcalls\sinto\sthe\smethod\sit\sjust\sloaded,\sso\sstructure\sand\sstructureResume\sevaluate\stheir\sbody\sone\slevel\sup\sin\sthe\scaller's\sframe\srather\sthan\sin\sunknown's\n-\stests:\sdocument-lazy-1.2
-D 2026-11-24T22:07:07.535
+C Remove\sthe\sorder-x.xml\sthe\sZUGFeRD\stests\sleft\sbehind\n\n-\stests:\sthe\sfiles\sorderXml\swrites\sare\sdeleted\safter\sthe\slast\stest\sthat\swrites\sone,\snot\safter\szugferd-13.x\n-\stests:\sthe\sorder-x.xml\schecked\sin\sby\saccident\sis\sremoved
+D 2026-11-24T22:10:36.185
 F Makefile.in d91f5766c7267c53141b153feddddf9197a5bf92cdf5ab10a12126ba0e1fc13d
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -452,7 +452,6 @@ F tests/markup.test f732cf7ebd41d6cc32c6d18bfc6975c0861a7c30410295cb6ced267f2e81
 F tests/morx.test 0049621d687480672e51590568c9708ddd71bd7c4d97786ebd6b58a55f5b5849
 F tests/notoemoji.test 1c995040ab5c149a6b81dc73387740b50852e71c8370b23987a1e375be095ce2
 F tests/option.test ee5e167a604a09aa4fe0b762d90e8cd2e3666733dd6b5f2e2908583cbd2e7b6a
-F tests/order-x.xml 4a27fb6a9c8c5bae67471aa9b4846767ca07774a114f405aa9589e20f208767a
 F tests/outline.test 9225672a6e1c99dc59a3ad05c4309e9c34c8fc6ce1529704b8af3b5b77e5c1c7
 F tests/page.test e44b02da28cb9dfce94c5814f304fa65cf3e02f52305306734d6c624c06c48e6
 F tests/pageLabel.test 2e22d3e01c40673d5038e576f0ba0c9fa3c70a1c466f573b32439535f04c3275
@@ -488,7 +487,7 @@ F tests/viewerPreferences.test 2e4f7881daff2f1e093b676c9b25669b8636328b50b6683f0
 F tests/writer.test 5858be47dbd0a986000abfbe874e6768ba84eba22b2bd9c1e10e2f074b387989
 F tests/xObject.test a2fa0202373d8817935d193637d74445031f24bfb87cf3908b7a3f337e5950a0
 F tests/xmp.test 2349d8f54e65cf61314afce9159d32c761a56b12c59bc0660d7d27279ad172ad
-F tests/zugferd.test 8b9e0cd5fe2b510cbc91a70f39081b63e38b7f1cf10b15f44866fd9238280ad4
+F tests/zugferd.test 2dd492072f7aa3565aefbbe9e841e88102ebe0f42703e0ea5181609e5b47ead2
 F text.tcl f58164a5f93d0e9c28e7d05f27a0bf551d42c54266420517934097dcfaaa904c
 F textAvoid.tcl 1bbb96cb2a679d0f926f42e0103aea52866eec3b7f3920e15de827cb5e223f83
 F textBlock.tcl 25420c853a6e2053e2d8ee3f93edefc8725c84291b7e9d4bbd6b59aaa3d9ba55
@@ -524,8 +523,8 @@ F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
 F xml.tcl 3abe87e2da0b29d2443e9e46a25284923cee6bd19b0b059f23e5da47bb816596
 F xmp.tcl cf3f90cfea0c7643c73506c3b8f1b283397a10fe3c9590c2fe91aa76e54045d9
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 0e46e491f4648ec85ffa4bc1d7238528ce036d9110751f3d9c6dad13da09a625
-R 9a1cc9a33c9f7cf5e38348a96c02e12c
+P ddb686cdd2d1b9086ae442fd5ebf45b256baaf4680f814b38e36fb75412164d5
+R d49d294472d6b4c9d39f41056f1df1d5
 U alex
-Z 22ae16e8ed985a3a8e0399ef46abcc3a
+Z ffe0a3370839d59043f927322d95e337
 # Remove this line to create a well-formed Fossil manifest.
