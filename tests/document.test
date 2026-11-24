@@ -1327,4 +1327,25 @@ test document-lazy-1.1 {no public method answers "unknown method" as a first cal
   }]
 } -result {}
 
+test document-lazy-1.2 {a -script body runs in the caller's frame on the first call too} -body {
+  # [unknown] loads the module on the first call and then calls the method.
+  # [structure] evaluates its body with uplevel 1 - and until 2026-11-24 that
+  # was the frame of [unknown] when the call was the first of a process: the
+  # body's variables vanished with it. The same call a second time, with the
+  # module loaded, went straight to the method and set them where expected.
+  set here [file dirname [file dirname [file normalize [info script]]]]
+  #
+  # [structure] has to be the first call of the document: [tagged] already
+  # loads the module (measured 2026-11-24), and after that the call no longer
+  # passes through [unknown].
+  ::tclpdfTest::freshInterp {
+    package require tclpdf
+    set d [::tclpdf::new -unit mm]
+    $d structure P -script {set first 1}
+    $d structure P -script {set second 1}
+    $d destroy
+    puts [list [info exists first] [info exists second]]
+  }
+} -result {1 1}
+
 cleanupTests

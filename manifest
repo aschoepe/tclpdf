@@ -1,5 +1,5 @@
-C Check\sthe\scaller's\sXMP\spacket\sagainst\sentity\sexpansion\sbefore\stdom\sparses\sit\n\n-\sxmp:\sCheckCaller\sruns\sthe\sentity\schecks\sof\sxml.tcl\sfirst,\sso\sa\sbomb\sor\sa\scycle\sin\sa\spacket\sset\swith\smetadata\sis\srefused\sunder\sTCLPDF\sXML\sENTITY\sinstead\sof\sbeing\swritten;\sparameter\sentities\sstay\sunresolved\n-\sxmp:\sthe\srefusal\sof\sa\spacket\sthat\sis\snot\swell\sformed\scarries\sthe\sparser's\swords,\sand\sa\sraw\scontribution's\srefusal\scarries\sthem\swithout\sthe\sTcl\sstack\n-\sxml:\samplification\sis\spublic,\sthe\schecks\salone\sfor\sa\scaller\sthat\sparses\swith\stdom\sitself\n-\smanual:\smetadata\snames\sthe\sentity\scheck\n-\stests:\sxmp-18.1\sto\s18.4
-D 2026-11-24T21:59:48.299
+C Run\sa\s-script\sbody\sin\sthe\scaller's\sframe\son\sthe\sfirst\scall\sof\sa\sprocess\n\n-\sdocument:\sunknown\stailcalls\sinto\sthe\smethod\sit\sjust\sloaded,\sso\sstructure\sand\sstructureResume\sevaluate\stheir\sbody\sone\slevel\sup\sin\sthe\scaller's\sframe\srather\sthan\sin\sunknown's\n-\stests:\sdocument-lazy-1.2
+D 2026-11-24T22:07:07.535
 F Makefile.in d91f5766c7267c53141b153feddddf9197a5bf92cdf5ab10a12126ba0e1fc13d
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -43,7 +43,7 @@ F doc/claude/skills/tclpdf-tcl/reference/12-import-update-info.md 104bdf7b603f26
 F doc/claude/skills/tclpdf-tcl/reference/13-form-fields.md d6dd58f4f6d4f250c4875e5bc13593cefa9625bc5d0f0773f70fbe5c79d34686
 F doc/tclpdf-default.html b543496816ce1ebbc250ce38eb1672a0a58cee20f635b1bd0d739a651a4cbe55
 F doc/tclpdf.md ab0413f7e2a5136042d9a20cf496b5811d067f55d9f20b0773c724a32f238cdf
-F document.tcl 6f254e4aae04f01b0f97be550590dccf49cb38b41c93e2f1c0c114c0ac49e377
+F document.tcl 2993fb82a29e60a15466e85e7d416781cf7eaa4390442922e27adf6e54a186f3
 F encrypt.tcl 8137afb09bf8f0548ab8220feae2ee49980eedf1b47c1eba8226cb91f4dc6662
 F event.tcl bf7548f7b6c7e92f70b14294d5cc7bae89c00dbfbe5afd51e5d7c17739f55b6a
 F examples/00.01-hello-world.tcl e46edb5d518baf7de3dc7a2335cd5aebe1b9eead5dbab1db799bbc25df30580d
@@ -410,7 +410,7 @@ F tests/colr.test 54a14049002a661586216d09dbfca4dcf43d9d2cf5391580606fda25aa438c
 F tests/colrPaint.test 0851b26416d46ebe86ab8c6476ae4cde5ec1dfb9ea9dfa00a2b2606f4959d4be
 F tests/crypto.test a22e6b1d56f804f2224f81fe0ff591a1fe99da34ec17015dbebfe832ef38aeed
 F tests/decimal.test 022992abd47168affed6f7f2dd26acc3a570bba31944f2095387aa7bfc579e10
-F tests/document.test 94aac1d6eadbacf327fe4dcd736dc6244352c286bd0252c7ca22e2e311d6c08b
+F tests/document.test c467b9f88793f2e3300a5c5f6f56fabb29838ac399d18335ab55cfcbfebb98ff
 F tests/encrypt.test 2678e5a011b2d2bdcc8e9d9a46975af3e28c2177f07dd92785f0ef6c57a713d1
 F tests/errorcode.test c173f07b17910a3b47b5b3ff79c2f7bcf6fbada58a498626d938fd6f17aa7ba9
 F tests/event.test 4f2421ec504f22faeceab45e576fe65165a87be7753503e98fac6800ce3384d3
@@ -524,8 +524,8 @@ F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
 F xml.tcl 3abe87e2da0b29d2443e9e46a25284923cee6bd19b0b059f23e5da47bb816596
 F xmp.tcl cf3f90cfea0c7643c73506c3b8f1b283397a10fe3c9590c2fe91aa76e54045d9
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 3f72f172b148bb61944608f587242a453fc147e1c39dd4025de11641a50d9b60
-R 8e9af1b6336a62b05e62c134ac49eb55
+P 0e46e491f4648ec85ffa4bc1d7238528ce036d9110751f3d9c6dad13da09a625
+R 9a1cc9a33c9f7cf5e38348a96c02e12c
 U alex
-Z f421870df7a3d15a37b14833670d1002
+Z 22ae16e8ed985a3a8e0399ef46abcc3a
 # Remove this line to create a well-formed Fossil manifest.

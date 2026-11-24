@@ -518,7 +518,15 @@ oo::class create ::tclpdf::document::document {
         return -code error -errorcode [list TCLPDF DOCUMENT MODULE $topic] \
             "tclpdf: module $topic does not provide \"$method\""
       }
-      return [my $method {*}$args]
+      # TAILCALL, not [my $method] inside this frame: [structure] and
+      # [structureResume] run their -script with [uplevel 1], in the frame
+      # of whoever called them. Called from here, that frame was this one -
+      # so the FIRST [structure ... -script] of a process, the one that
+      # loaded the module, evaluated its body in [unknown], and a variable
+      # the body set was gone when the caller looked for it (measured
+      # 2026-11-09). Every later call went straight to the method and was
+      # right, which is why no test saw it.
+      tailcall my $method {*}$args
     }
     next $method {*}$args
   }
