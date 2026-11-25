@@ -227,6 +227,50 @@ test svgCss-2.12 {both XML parsers read the same stylesheet} -body {
   }
 } -result {{{{0 0 1}} {style 1}}}
 
+# The three properties svgClip.tcl reads, through a class as through an
+# attribute: Illustrator writes its clipping as
+# ".cls-2{clip-path:url(#clip-path)}", and until 2026-11-25 the element was
+# drawn unclipped and the block reported as "style".
+set ::clipDefs {<defs><clipPath id="k"><rect width="5" height="5"/></clipPath>
+    <mask id="m"><rect width="5" height="5" fill="white"/></mask></defs>}
+
+test svgCss-2.13 {a class sets clip-path} -body {
+  lassign [cssProbe "$::clipDefs<style>.c{clip-path:url(#k)}</style>
+      <rect class=\"c\" width=\"10\" height=\"10\"/>"] content info
+  list [regexp {W n} $content] $info
+} -result {1 {}}
+
+test svgCss-2.14 {a class sets mask} -body {
+  lassign [cssProbe "$::clipDefs<style>.c{mask:url(#m)}</style>
+      <rect class=\"c\" width=\"10\" height=\"10\"/>"] content info
+  list [regexp {svgMask[0-9]+ gs} $content] $info
+} -result {1 {}}
+
+test svgCss-2.15 {a class sets clip-rule on a clipping shape} -body {
+  # The hole in the ring is punched (W*) only if the class is read; without
+  # it the rule is nonzero and the hole is filled in (W).
+  lassign [cssProbe {<style>.e{clip-rule:evenodd}</style>
+      <defs><clipPath id="r"><path class="e"
+      d="M0,0 H10 V10 H0 Z M2,2 H8 V8 H2 Z"/></clipPath></defs>
+      <rect clip-path="url(#r)" width="10" height="10"/>}] content info
+  list [regexp -inline {W\*? n} $content] $info
+} -result {{{W* n}} {}}
+
+test svgCss-2.16 {style="" beats a class on the clip properties} -body {
+  # SVG 1.1, 6.4 as for the painting properties: the class names a clip, a
+  # mask and evenodd, the element's style="" takes back all three.
+  lassign [cssProbe "$::clipDefs<style>.c{clip-path:url(#k);mask:url(#m)}
+      .e{clip-rule:evenodd}</style>
+      <rect class=\"c\" style=\"clip-path:none;mask:none\" width=\"10\"
+      height=\"10\"/>"] plain ->
+  lassign [cssProbe {<style>.e{clip-rule:evenodd}</style>
+      <defs><clipPath id="r"><path class="e" style="clip-rule:nonzero"
+      d="M0,0 H10 V10 H0 Z M2,2 H8 V8 H2 Z"/></clipPath></defs>
+      <rect clip-path="url(#r)" width="10" height="10"/>}] rule ->
+  list [regexp {W\*? n} $plain] [regexp {svgMask[0-9]+ gs} $plain] \
+      [regexp -inline {W\*? n} $rule]
+} -result {0 0 {{W n}}}
+
 # --- what [svg info] still reports ---------------------------------------
 
 test svgCss-3.1 {a block read in full is no omission} -body {
@@ -244,12 +288,12 @@ test svgCss-3.2 {a block with an @font-face is reported, its classes read} -body
 } -result {{{0 0 1}} {style 1}}
 
 test svgCss-3.3 {a property a class cannot set is reported} -body {
-  # clip-path is read from an attribute and from style="", not from a class.
-  lassign [cssProbe {<defs><clipPath id="c"><rect width="5" height="5"/></clipPath>
-      <style>.a{clip-path:url(#c)}</style></defs>
+  # filter is not drawn by this package, from a class or anywhere else.
+  lassign [cssProbe {<defs><filter id="f"><feGaussianBlur stdDeviation="1"/>
+      </filter><style>.a{filter:url(#f);fill:#0000ff}</style></defs>
       <rect class="a" width="10" height="10"/>}] content info
-  list [regexp {W n} $content] $info
-} -result {0 {style 1}}
+  list [fills $content] [dict get $info style]
+} -result {{{0 0 1}} 1}
 
 test svgCss-3.4 {an !important declaration is not applied and is reported} -body {
   lassign [cssProbe {<style>.a{fill:#0000ff !important}</style>
@@ -269,6 +313,15 @@ test svgCss-3.6 {one report per block, however much is left in it} -body {
       <rect class="a" width="10" height="10"/>}] -> info
   set info
 } -result {style 1}
+
+test svgCss-3.7 {a block of clip declarations only is no omission} -body {
+  # Until 2026-11-25 clip-path, mask and clip-rule were outside the set a
+  # class could set, and such a block came back as "style".
+  lassign [cssProbe "$::clipDefs<style>.c{clip-path:url(#k)} .d{mask:url(#m)}
+      .e{clip-rule:evenodd}</style>
+      <rect class=\"c\" width=\"10\" height=\"10\"/>"] -> info
+  set info
+} -result {}
 
 # --- the ZUGFeRD logo -----------------------------------------------------
 

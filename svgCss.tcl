@@ -30,7 +30,9 @@
 #   properties  exactly the ones the style cascade reads from an attribute
 #               and from style="" - the list is [svgPaint]'s and not a
 #               second one here - plus stop-color and stop-opacity, which a
-#               <stop> reads on its own
+#               <stop> reads on its own, and clip-path, mask and clip-rule,
+#               which svgClip.tcl reads (Illustrator writes its clipping as
+#               ".cls-2{clip-path:url(#clip-path)}")
 #   comments    /* ... */ and the <!-- --> pair are taken out before anything
 #               else
 #
@@ -46,13 +48,12 @@
 # (@font-face, @media, @import), every selector that is not a single class
 # (rect, #id, .a .b, .a.b, rect.a, :hover, *), a declaration marked
 # !important, and a declaration of a property outside the list above -
-# clip-path and mask among them, which this package reads from an attribute
-# or a style="" but not from a class. A block from which everything was
-# read is no omission and is not reported; one with anything left over is
-# reported once, as the block was before. The reason for the narrow line is
-# the count above: the rest occurs in a handful of files, and a stylesheet
-# with selectors and specificity is a second cascade this package would
-# have to keep right in all its corners for them.
+# filter among them, which this package does not draw. A block from which
+# everything was read is no omission and is not reported; one with anything
+# left over is reported once, as the block was before. The reason for the
+# narrow line is the count above: the rest occurs in a handful of files, and
+# a stylesheet with selectors and specificity is a second cascade this
+# package would have to keep right in all its corners for them.
 #
 # The topic is the stylesheet - read it, and answer the declarations one
 # element gets from it. Where they go in the cascade is [SvgStyle]'s
@@ -244,7 +245,8 @@ oo::define ::tclpdf::document::document {
     if {$type ne {} && ![string equal -nocase $type text/css]} {
       return [dict create rules {} unread [expr {[string trim $text] ne {}}]]
     }
-    set read [concat $::tclpdf::svgPaint::cascade $::tclpdf::svgPaint::stop]
+    set read [concat $::tclpdf::svgPaint::cascade $::tclpdf::svgPaint::stop \
+        $::tclpdf::svgPaint::clip]
     set rules {}
     set unread 0
     foreach rule [::tclpdf::svgCss::rules $text] {

@@ -67,9 +67,10 @@
 #               /* comment */ are stripped from a declaration rather than
 #               taken for part of its value
 #   stylesheet  class rules of a <style> block, <defs> included: a single
-#               class or a comma group of them, the same set of properties,
-#               ranked between the attribute and style="" (SVG 1.1, 6.4) -
-#               svgCss.tcl, since 2026-11-25
+#               class or a comma group of them, the same set of properties
+#               and clip-path, mask and clip-rule, ranked between the
+#               attribute and style="" (SVG 1.1, 6.4) - svgCss.tcl, since
+#               2026-11-25
 #   geometry    transform (translate, scale, rotate about a point, skewX,
 #               skewY, matrix), viewBox (a zero width or height there
 #               disables the drawing, SVG 7.7), the viewport of a nested
@@ -731,8 +732,7 @@ oo::define ::tclpdf::document::document {
     upvar 1 $seenVariable seen
     # Attribute, class rule, style="" - the order [SvgStyle] gives them, so
     # that the value asked about here is the one that will be painted.
-    set declarations [dict merge [my SvgCssDeclarations $node] \
-        [my SvgDeclarations [::tclpdf::xml attribute $node style]]]
+    set declarations [my SvgOwnDeclarations $node]
     foreach property {fill stroke color} {
       set value [::tclpdf::xml attribute $node $property]
       if {[dict exists $declarations $property]} {

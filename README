@@ -76,7 +76,7 @@ DOCUMENTATION
 LICENCE
 
     Copyright (C) 2026 Alexander Schoepe, Bochum, DE
-    Contributors - special thanks: Ralf Fassel
+    Contributors - special thanks: Ralf Fassel, Gregor Ebbing
 
     MIT - see license.terms. It covers the modules and pkgIndex.tcl. The
     third part of what is installed, icc/, whose profiles end up inside

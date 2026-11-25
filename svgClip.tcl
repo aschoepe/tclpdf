@@ -50,6 +50,7 @@ package require tclpdf::pdfObj 1.0-
 package require tclpdf::geometry 1.0-
 package require tclpdf::xml 1.3-
 package require tclpdf::svgPath 1.0-
+package require tclpdf::svgPaint 1.10-
 package require tclpdf::document 1.0-
 
 namespace eval ::tclpdf::svgClip {
@@ -58,15 +59,17 @@ namespace eval ::tclpdf::svgClip {
 oo::define ::tclpdf::document::document {
 
   # One property as it stands on ONE element: the presentation attribute, and
-  # the style="" declaration that beats it. A declaration in style="" is a
-  # CSS declaration and outranks a presentation attribute (SVG 1.1, 6.4), and
-  # that is true of every property this module reads - clip-path, mask and
+  # the class rule and style="" declaration that beat it (SVG 1.1, 6.4) -
+  # [SvgOwnDeclarations] in svgPaint.tcl, the mixture the cascade uses. That
+  # is true of every property this module reads - clip-path, mask and
   # clip-rule alike. Here once, so the three cannot drift: clip-rule used to
   # be the one read straight off the attribute, and style="clip-rule:evenodd"
-  # then filled the hole in the shape it was supposed to punch.
+  # then filled the hole in the shape it was supposed to punch. The class
+  # rank came on 2026-11-25: Illustrator writes its clipping as
+  # ".cls-2{clip-path:url(#clip-path)}", and the element was drawn unclipped.
   method SvgClipProperty {node property} {
     set value [::tclpdf::xml attribute $node $property]
-    set declarations [my SvgDeclarations [::tclpdf::xml attribute $node style]]
+    set declarations [my SvgOwnDeclarations $node]
     if {[dict exists $declarations $property]} {
       set value [dict get $declarations $property]
     }
@@ -76,7 +79,7 @@ oo::define ::tclpdf::document::document {
   # The id a clip-path or mask property points at, or the empty string.
   #
   # Neither property is inherited (SVG 1.1, 14.3.5 and 14.4), so the node's
-  # own attribute and its own style="" are the only places looked at - a
+  # own attribute, class rule and style="" are the only places looked at - a
   # group carrying clip-path must not clip its children a second time each.
   method SvgClipReference {node property} {
     set value [my SvgClipProperty $node $property]
@@ -442,4 +445,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::svgClip 1.2
+package provide tclpdf::svgClip 1.3

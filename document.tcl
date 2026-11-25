@@ -392,6 +392,7 @@ oo::class create ::tclpdf::document::document {
       SvgStyle svgPaint
       SvgGradient svgPaint
       SvgStops svgPaint
+      SvgOwnDeclarations svgPaint
       SvgClipEnter svgClip
       SvgClipReference svgClip
       SvgClipRuleOf svgClip

@@ -28,7 +28,8 @@ namespace eval ::tclpdf::svgPaint {
   # The properties the style cascade reads, from a presentation attribute,
   # from a class rule and from style="" alike - ONE list, which [SvgStyle]
   # walks and svgCss.tcl asks which declarations of a class rule it may
-  # apply. A property missing here is one a class cannot set either.
+  # apply. A property missing here and in the two lists below is one a class
+  # cannot set either.
   variable cascade {
     fill stroke stroke-width stroke-linecap stroke-linejoin stroke-miterlimit
     stroke-dasharray stroke-dashoffset fill-opacity stroke-opacity fill-rule
@@ -37,6 +38,10 @@ namespace eval ::tclpdf::svgPaint {
   }
   # The two a <stop> reads on its own, outside the cascade - [SvgStops].
   variable stop {stop-color stop-opacity}
+  # The three svgClip.tcl reads off one element, also outside the cascade -
+  # clip-path and mask are not inherited, and clip-rule is asked upward from
+  # the <clipPath> by [SvgInherited] rather than handed down.
+  variable clip {clip-path mask clip-rule}
 }
 
 oo::define ::tclpdf::document::document {
@@ -409,6 +414,25 @@ oo::define ::tclpdf::document::document {
     return [lmap number $numbers {::tclpdf::pdfObj num $number}]
   }
 
+  # What one element declares beyond its presentation attributes, as a
+  # dictionary: the class rules of the drawing's stylesheet (svgCss.tcl) with
+  # its style="" written over them. SVG 1.1, 6.4 ranks the three attribute <
+  # class rule < style="": the attribute is a rule of specificity zero at the
+  # start of the author stylesheet. A caller lets an entry here beat the
+  # attribute. [SvgDeclarations] reads style="", which is where !important
+  # and a CSS comment are taken off the value - until 2026-08-27 "fill:#0a0
+  # !important" reached the colour module whole and cost the drawing.
+  #
+  # ONE MIXTURE for every reader - the cascade, a <stop>, the pre-pass
+  # [SvgCheckPaint] and [SvgClipProperty] - because a reader with its own
+  # copy is a reader that misses a rank: the clip properties had none for the
+  # class, and Illustrator writes its clipping that way,
+  # ".cls-2{clip-path:url(#clip-path)}", which drew the element unclipped.
+  method SvgOwnDeclarations {node} {
+    return [dict merge [my SvgCssDeclarations $node] \
+        [my SvgDeclarations [::tclpdf::xml attribute $node style]]]
+  }
+
   # The style cascade of one element - the painting properties it inherits
   # with its own written over them (SVG 6.4). The functional colour notation
   # is read in svg.tcl, at [SvgColourValue].
@@ -439,19 +463,10 @@ oo::define ::tclpdf::document::document {
         dict set style $key $value
       }
     }
-    # A class rule of the drawing's stylesheet (svgCss.tcl) beats the
-    # presentation attribute and loses to style="" (SVG 1.1, 6.4): the
-    # attribute is a rule of specificity zero at the start of the author
-    # stylesheet. Written into the same dictionary, so a property a class
-    # sets on a <g> is inherited by its children like any other.
-    dict for {key value} [my SvgCssDeclarations $node] {
-      dict set style $key $value
-    }
-    # A declaration in style="" beats the presentation attribute (SVG 6.4).
-    # Read through [SvgDeclarations], which is where !important and a CSS
-    # comment are taken off the value - until 2026-08-27 "fill:#0a0
-    # !important" reached the colour module whole and cost the drawing.
-    dict for {key value} [my SvgDeclarations [::tclpdf::xml attribute $node style]] {
+    # Class rule and style="" over the attributes - [SvgOwnDeclarations].
+    # Written into the same dictionary, so a property a class sets on a <g>
+    # is inherited by its children like any other.
+    dict for {key value} [my SvgOwnDeclarations $node] {
       dict set style $key $value
     }
     # The three opacities in decimal ([pdfObj decimal]), because one of them
@@ -808,10 +823,7 @@ oo::define ::tclpdf::document::document {
       if {[string map {svg: {}} [::tclpdf::xml name $child]] ne "stop"} {
         continue
       }
-      # A class rule (svgCss.tcl) under style="", in the order [SvgStyle]
-      # gives the two.
-      set declarations [dict merge [my SvgCssDeclarations $child] \
-          [my SvgDeclarations [::tclpdf::xml attribute $child style]]]
+      set declarations [my SvgOwnDeclarations $child]
       # In decimal, the per cent as the fraction: offset="010%" is a tenth.
       set offset [::tclpdf::pdfObj::decimal [::tclpdf::xml attribute $child offset 0]]
       if {[string match {*%} $offset]} {
