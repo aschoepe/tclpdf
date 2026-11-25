@@ -398,6 +398,211 @@ test textRun-6.9 {a block without headings is placed by the sum it always was} -
   string equal $plain $runs
 } -result 1
 
+# --- -headingSpacing ------------------------------------------------------------
+#
+# A gap before and after every heading, on top of -paragraphSpacing, in the
+# document unit - mm here, so the gaps are written as 6 and 3 points and the
+# stream is read in points. Neither gap at the head or the foot of a block.
+
+set ::hsGaps [list -headingSpacing [list [::tclpdf::geometry fromPoints 6 mm] \
+    [::tclpdf::geometry fromPoints 3 mm]]]
+set ::hsBody [list "Erste" {} "Titel" {heading 1} "Letzte" {}]
+
+test textRun-6.10 {-headingSpacing: textHeight, textLines and the drawn lines agree} -body {
+  set doc [::tclpdfTest::runDoc]
+  # Body to heading 19.2 + 6, heading to body 12 + 3, one body leading
+  # under the last line: 0, 25.2, 40.2 and 52.2 pt.
+  set options [list -width 60 -runs 1 {*}$::hsGaps]
+  set height [$doc textHeight $::hsBody {*}$options]
+  set lines [$doc textLines $::hsBody {*}$options]
+  set plainLines [$doc textLines $::hsBody -width 60 -runs 1]
+  set y [$doc text $::hsBody -at {20 30} {*}$options]
+  set ys [::tclpdfTest::starts [::tclpdfTest::content $doc] y]
+  $doc destroy
+  list [::tclpdfTest::steps $ys] [llength $ys] [string equal $lines $plainLines] \
+      [format %.3f [::tclpdf::geometry toPoints $height mm]] \
+      [format %.3f [::tclpdf::geometry toPoints [expr {$y - 30}] mm]]
+} -result {{25.20 15.00} 3 1 52.200 52.200}
+
+test textRun-6.11 {-headingSpacing: no gap before a heading that opens the block, none after one that closes it} -body {
+  set doc [::tclpdfTest::runDoc]
+  set opening [list "Titel" {heading 1} "Letzte" {}]
+  set closing [list "Erste" {} "Titel" {heading 1}]
+  set result {}
+  foreach pairs [list $opening $closing] {
+    set plain [$doc textHeight $pairs -width 60 -runs 1]
+    set gapped [$doc textHeight $pairs -width 60 -runs 1 {*}$::hsGaps]
+    lappend result [format %.3f [::tclpdf::geometry toPoints \
+        [expr {$gapped - $plain}] mm]]
+  }
+  # The first baseline of an opening heading stands where it stood.
+  $doc text $opening -at {20 30} -width 60 -runs 1
+  $doc text $opening -at {20 30} -width 60 -runs 1 {*}$::hsGaps
+  set ys [::tclpdfTest::starts [::tclpdfTest::content $doc] y]
+  $doc destroy
+  lappend result [string equal [lindex $ys 0] [lindex $ys 2]]
+} -result {3.000 6.000 1}
+
+test textRun-6.12 {-headingSpacing: a heading in runs, in tags and in Markdown is placed alike} -body {
+  set result {}
+  foreach {kind text} [list runs [list "Erste" {} "Titel" {heading 2} "Letzte" {}] \
+      tags "Erste<h2>Titel</h2>Letzte" markdown "Erste\n## Titel\nLetzte"] {
+    set doc [::tclpdfTest::runDoc]
+    set options [list -width 60 {*}$::hsGaps]
+    if {$kind eq "runs"} {
+      lappend options -runs 1
+    } else {
+      lappend options -markup $kind
+    }
+    set height [$doc textHeight $text {*}$options]
+    $doc text $text -at {20 30} {*}$options
+    lappend result [list \
+        [::tclpdfTest::steps [::tclpdfTest::starts [::tclpdfTest::content $doc] y]] \
+        [format %.3f [::tclpdf::geometry toPoints $height mm]]]
+    $doc destroy
+  }
+  lsort -unique $result
+} -result {{{21.60 15.00} 48.600}}
+
+test textRun-6.13 {-headingSpacing adds to -paragraphSpacing, which stays between the other paragraphs} -body {
+  set doc [::tclpdfTest::runDoc]
+  $doc text [list "Eins\nZwei" {} "Titel" {heading 1} "Drei" {}] -at {20 30} \
+      -width 60 -runs 1 -paragraphSpacing [::tclpdf::geometry fromPoints 2 mm] \
+      {*}$::hsGaps
+  set ys [::tclpdfTest::starts [::tclpdfTest::content $doc] y]
+  $doc destroy
+  ::tclpdfTest::steps $ys
+} -result {14.00 27.20 17.00}
+
+test textRun-6.14 {-headingSpacing: a heading that no longer fits with its gap goes to the rest with its text} -body {
+  set doc [::tclpdfTest::runDoc]
+  # 44 pt holds the three lines without the gaps (43.2) and not the heading
+  # with its gap (25.2 + 19.2); 50 pt holds the heading and not the line
+  # under it (40.2 + 12), and a heading is never the last line.
+  set result {}
+  foreach room {44 44 50} gaps [list {} $::hsGaps $::hsGaps] {
+    set answer [$doc text $::hsBody -at {20 30} -width 60 -runs 1 \
+        -height [::tclpdf::geometry fromPoints $room mm] {*}$gaps]
+    lappend result [format %.3f [::tclpdf::geometry toPoints \
+        [expr {[dict get $answer y] - 30}] mm]] \
+        [lrange [dict get $answer rest] 0 1]
+  }
+  $doc destroy
+  set result
+} -result {43.200 {} 12.000 {Titel {heading 1}} 12.000 {Titel {heading 1}}}
+
+test textRun-6.15 {-headingSpacing in a paginated block: the gap moves a heading over, and the next page opens without it} -body {
+  set result {}
+  set firsts {}
+  foreach above {15 15 8} gaps [list {} $::hsGaps {}] {
+    set doc [::tclpdfTest::runDoc]
+    set bottom [lindex [$doc page typeArea] 3]
+    $doc text [list "Eins" {} "Titel" {heading 2} "Zwei" {}] \
+        -at [list 20 [expr {$bottom - $above}]] -width 60 -runs 1 -paginate 1 \
+        {*}$gaps
+    lappend result [$doc page count]
+    if {[$doc page count] > 1} {
+      set ys [::tclpdfTest::starts [::tclpdfTest::content $doc 1] y]
+      lappend result [::tclpdfTest::steps $ys]
+      lappend firsts [lindex $ys 0]
+    }
+    $doc destroy
+  }
+  # The heading that the gap moved opens page two where the heading that
+  # did not fit without a gap opens it.
+  lappend result [llength [lsort -unique $firsts]]
+} -result {1 2 15.00 2 12.00 1}
+
+test textRun-6.16 {-headingSpacing: one value is the gap before and after} -body {
+  set gap [::tclpdf::geometry fromPoints 5 mm]
+  set streams {}
+  foreach value [list $gap [list $gap $gap]] {
+    set doc [::tclpdfTest::runDoc]
+    $doc text $::hsBody -at {20 30} -width 60 -runs 1 -headingSpacing $value
+    lappend streams [::tclpdfTest::content $doc]
+    set ys [::tclpdfTest::starts [lindex $streams end] y]
+    $doc destroy
+  }
+  list [string equal [lindex $streams 0] [lindex $streams 1]] \
+      [::tclpdfTest::steps $ys]
+} -result {1 {24.20 17.00}}
+
+test textRun-6.17 {-headingSpacing: a negative gap, a third value and a word are refused by all three calls, before the stream} -body {
+  set doc [::tclpdfTest::runDoc]
+  set codes {}
+  foreach value {-1 {1 -2} {1 2 3} bogus NaN "\{"} {
+    foreach call {textHeight textLines text} {
+      set extra {}
+      if {$call eq "text"} {
+        set extra {-at {20 30}}
+      }
+      lappend codes [lindex [::tclpdfTest::refusal {
+        $doc $call $::hsBody -width 60 -runs 1 {*}$extra -headingSpacing $value
+      }] end]
+    }
+  }
+  set stream [::tclpdfTest::content $doc]
+  $doc destroy
+  list [lsort -unique $codes] [llength $codes] [string length $stream]
+} -result {headingSpacing 18 0}
+
+test textRun-6.18 {without -headingSpacing a block with headings writes the bytes it wrote before the option} -body {
+  # Content streams measured with the code of 2026-11-25 before the option
+  # was added (the same under tclsh8.6 and tclsh9.0): a tagged Markdown
+  # block with -paragraphSpacing, a height-limited one, a paginated one
+  # over two pages. An empty value and {0 0} write the same as none.
+  set body "Erster Absatz mit genug Text für zwei Zeilen im Block, und noch etwas mehr."
+  set md "# Titel\n$body\n## Mitte\n$body\n### Klein\n$body"
+  set result {}
+  foreach gaps {{} {-headingSpacing {}} {-headingSpacing {0 0}}} {
+    set sums {}
+    set doc [::tclpdfTest::runDoc]
+    $doc tagged 1
+    $doc text $md -at {20 30} -width 60 -markup markdown -align justify \
+        -paragraphSpacing 2 {*}$gaps
+    set y [dict get [$doc text $md -at {20 120} -width 60 -markup markdown \
+        -height 30 {*}$gaps] y]
+    lappend sums [zlib crc32 [::tclpdfTest::content $doc 0]] [format %.3f $y]
+    $doc destroy
+    set doc [::tclpdfTest::runDoc]
+    $doc text [string repeat "$md\n" 8] -at {20 250} -width 60 \
+        -markup markdown -paginate 1 -paragraphSpacing 1 {*}$gaps
+    lappend sums [zlib crc32 [::tclpdfTest::content $doc 0]] \
+        [zlib crc32 [::tclpdfTest::content $doc 1]]
+    $doc destroy
+    lappend result $sums
+  }
+  lsort -unique $result
+} -result {{2423502551 146.670 1430882760 1018209852}}
+
+test textRun-6.19 {-headingSpacing moves lines and changes no structure of a tagged block} -body {
+  set streams {}
+  foreach gaps [list {} $::hsGaps] {
+    set doc [::tclpdfTest::runDoc]
+    $doc tagged 1
+    $doc text "Erste\n## Titel\nLetzte" -at {20 30} -width 60 -markup markdown \
+        {*}$gaps
+    set stream [::tclpdfTest::content $doc]
+    # The numbers out, the operators and the marks in.
+    lappend streams [regsub -all {[-0-9.]+} $stream N]
+    $doc destroy
+  }
+  list [string equal [lindex $streams 0] [lindex $streams 1]] \
+      [regexp -all {/H2 <<} $stream] [regexp -all {/P <<} $stream]
+} -result {1 1 2}
+
+test textRun-6.20 {a table style takes neither -paragraphSpacing nor -headingSpacing: a cell has no headings} -body {
+  set doc [::tclpdfTest::runDoc]
+  set codes {}
+  foreach key {paragraphSpacing headingSpacing} {
+    lappend codes [lrange [::tclpdfTest::refusal {
+      $doc table -at {20 30} -body {{a b}} -style [list $key 2]
+    }] 0 3]
+  }
+  $doc destroy
+  set codes
+} -result {{TCLPDF OPTION KEY paragraphSpacing} {TCLPDF OPTION KEY headingSpacing}}
+
 # --- underline, strikeout, links ------------------------------------------------
 
 test textRun-7.1 {an underlined run draws one stroke under its piece, after the text, in the text's colour} -body {

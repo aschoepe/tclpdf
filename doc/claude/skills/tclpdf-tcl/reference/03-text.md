@@ -115,6 +115,21 @@ set runs {
 set y [$doc text $runs -at [list 20 [expr {$y + 6}]] -width 80 -anchor top \
     -runs 1 -family helvetica]
 
+# -headingSpacing {before after}: room above and below every heading, in the
+# document unit, ON TOP OF -paragraphSpacing (which stays the gap between all
+# paragraphs) - the same for <h2>, "## " and {heading 2}. One value is both
+# gaps. None above a heading that opens the block, a column or a page, none
+# below one that closes it; a heading whose gap no longer fits under -height
+# goes to the rest with its text. textHeight counts the gaps as text draws
+# them, and textLines breaks the same lines with or without them.
+set sections "# Terms\nPayable within 14 days.\n## Late payment\nInterest applies after the due date."
+set options {-width 80 -markup markdown -family helvetica -paragraphSpacing 1 \
+    -headingSpacing {4 1.5}}
+set height [$doc textHeight $sections {*}$options]
+set top [expr {$y + 10}]
+set y [$doc text $sections -at [list 20 $top] {*}$options]
+puts "sections: [format %.2f $height] mm measured, [format %.2f [expr {$y - $top}]] mm drawn"
+
 # An embedded alias is ONE face: a bold run in "body" is refused rather than
 # set regular in silence. [font family] ties embedded faces under one name -
 # -regular is required, -bold, -italic, -boldItalic as far as the faces exist -

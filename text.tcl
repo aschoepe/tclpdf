@@ -148,8 +148,8 @@ namespace eval ::tclpdf::text {
   # ([decimals] below). The font state's own numbers are read by
   # [TextCheck].
   variable numberOptions {at rotate width height columns gutter indent
-      indentRight firstIndent paragraphSpacing avoid avoidMargin shrinkLimit
-      fit}
+      indentRight firstIndent paragraphSpacing headingSpacing avoid
+      avoidMargin shrinkLimit fit}
 }
 
 # The numbers of a [text], [textLines] or [textHeight] call read in decimal
@@ -407,6 +407,7 @@ oo::define ::tclpdf::document::document {
     set defaults {at {} rotate 0 align left width {} anchor baseline
         height {} paginate 0 columns 1 gutter {} balance 0
         indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
+        headingSpacing {}
         avoid {} avoidMargin 0 tag P expansion {} hyphenate 0 breakHyphen 0
         fit {} shrinkLimit 85 emergencyHyphen 0 runs 0 markup {}}
     foreach name $::tclpdf::text::stateOptions {
@@ -556,7 +557,8 @@ oo::define ::tclpdf::document::document {
       #
       # This is the facade rule in practice - a caller says "text with a
       # width" and does not need to know that two files are involved.
-      # 1.23 for the break hyphen kept out of a replacement.
+      # 1.23 for the break hyphen kept out of a replacement, and for
+      # -headingSpacing, which an older block would take and ignore.
       package require tclpdf::textBlock 1.23-
       my TextLeading $state $given $args
       set options [my TextBlockCheck $options]

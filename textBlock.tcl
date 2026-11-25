@@ -69,6 +69,7 @@ namespace eval ::tclpdf::textBlock {
   variable options {at {} rotate 0 align left width {} anchor baseline
       height {} paginate 0 columns 1 gutter {} balance 0
       indent 0 indentRight 0 firstIndent 0 paragraphSpacing 0
+      headingSpacing {}
       avoid {} avoidMargin 0 tag P expansion {} hyphenate 0 breakHyphen 0
       hyphens 0 emergencyHyphen 0 runs 0 markup {}}
 
@@ -265,7 +266,8 @@ oo::define ::tclpdf::document::document {
     lassign [my TextBlockIntake $string $options textHeight] string options
     lassign [my TextBlockLines $string $options] lines state leading lift
     lassign [my TextBlockPlace $lines $leading \
-        [dict get $options paragraphSpacing] {}] drawn rest below
+        [dict get $options paragraphSpacing] \
+        [my TextBlockHeadingSpacing $options] {}] drawn rest below
     return [expr {$lift + $below}]
   }
 
@@ -605,9 +607,27 @@ oo::define ::tclpdf::document::document {
   # and the first at 728.5, so the text ran backwards up the page and
   # overprinted itself. The option is a gap between paragraphs; a gap below
   # zero is not a layout anybody asks for, and nothing said so.
+  #
+  # -headingSpacing is one distance or two - before a heading, after it -
+  # and each of them is asked what -paragraphSpacing is asked, for the same
+  # reason: a negative gap before a heading sets it over the paragraph
+  # above. The list itself is asked first, since a third value would have
+  # to mean something and nothing says what.
   method TextBlockDistances {options} {
+    set heading [dict get $options headingSpacing]
+    if {![string is list $heading] || [llength $heading] > 2} {
+      return -code error -errorcode [list TCLPDF TEXT ARGUMENT headingSpacing] \
+          "tclpdf: -headingSpacing takes one distance or two - the gap\
+          before a heading and the gap after it -, not \"$heading\""
+    }
+    set distances {}
     foreach name {indent indentRight firstIndent paragraphSpacing} {
-      set value [dict get $options $name]
+      lappend distances $name [dict get $options $name]
+    }
+    foreach value $heading {
+      lappend distances headingSpacing $value
+    }
+    foreach {name value} $distances {
       # [text::finite] rather than [string is double]: see the proc in
       # text.tcl for what a NaN costs once it is past a check.
       if {![::tclpdf::text::finite $value]} {
@@ -630,6 +650,12 @@ oo::define ::tclpdf::document::document {
             "tclpdf: -paragraphSpacing is the gap between two paragraphs and\
             is 0 or more, not \"$value\" - a negative gap sets the next\
             paragraph over the one before it"
+      }
+      if {$name eq "headingSpacing" && $value < 0} {
+        return -code error -errorcode [list TCLPDF TEXT ARGUMENT $name] \
+            "tclpdf: -headingSpacing is the gap before and after a heading\
+            and is 0 or more, not \"$value\" - a negative gap sets a\
+            heading over the paragraph next to it"
       }
     }
     # AND THE INDENTS HAVE TO LEAVE A BAND. The same question the gutter is
@@ -1485,7 +1511,17 @@ oo::define ::tclpdf::document::document {
   # so with a limit the y handed back moved down by one spacing per held-back
   # paragraph: a caller continuing under the block left a gap for text that
   # was set in the next column instead.
-  method TextBlockPlace {lines leading spacing limit} {
+  #
+  # headingSpacing is the pair {before after} of TextBlockHeadingSpacing, and
+  # it is added on the same terms: between two DRAWN paragraphs, on top of
+  # the spacing, "before" where the paragraph that begins is a heading and
+  # "after" where the one that ended was. So the first line of a block - or
+  # of a column, or of a page of a paginated run - gets no "before", and the
+  # block's last line no "after": a text that opens with a heading stands
+  # where it was put, and the y a block answers is the line under it, as
+  # without the option. A heading that no longer fits with its "before" is
+  # held back by the limit like any line, and goes with its text.
+  method TextBlockPlace {lines leading spacing headingSpacing limit} {
     set drawn {}
     set rest {}
     set spacings 0
@@ -1501,6 +1537,8 @@ oo::define ::tclpdf::document::document {
     # lines (-avoid) relies on, which a block with headings refuses.
     set paragraphs [my state textRunsParagraphs]
     set leadings [my TextBlockParagraphs $paragraphs leading]
+    set headings [my TextBlockParagraphs $paragraphs heading]
+    lassign $headingSpacing before after
     set previousTop 0
     # OVER THE INDICES, so that the tail can be taken in one go when the
     # limit is reached: the loop used to walk to the end of the list and
@@ -1511,6 +1549,14 @@ oo::define ::tclpdf::document::document {
       set line [lindex $lines $index]
       set paragraph [dict get $line paragraph]
       set advance [expr {$previous ne {} && $paragraph != $previous ? $spacing : 0}]
+      if {$previous ne {} && $paragraph != $previous} {
+        if {[dict exists $headings $previous]} {
+          set advance [expr {$advance + $after}]
+        }
+        if {[dict exists $headings $paragraph]} {
+          set advance [expr {$advance + $before}]
+        }
+      }
       set own $leading
       if {[dict size $leadings]} {
         if {[dict exists $leadings $paragraph]} {
@@ -1549,7 +1595,6 @@ oo::define ::tclpdf::document::document {
     # every typographer's rule book forbids. Where the limit cut right after
     # a heading, the heading goes with the rest - every trailing line that
     # belongs to a heading paragraph, so a two-line heading moves whole.
-    set headings [my TextBlockParagraphs $paragraphs heading]
     if {[dict size $headings] && [llength $rest]} {
       while {[llength $drawn]} {
         set lastLine [lindex [lindex $drawn end] 0]
@@ -1860,7 +1905,8 @@ oo::define ::tclpdf::document::document {
       lassign [my TextBlockLines $string $options] lines state leading lift
       set limit [expr {max(0, [lindex [my page typeArea] 3] - $y - $lift)}]
       lassign [my TextBlockPlace $lines $leading \
-          [dict get $options paragraphSpacing] $limit] drawn
+          [dict get $options paragraphSpacing] \
+          [my TextBlockHeadingSpacing $options] $limit] drawn
       if {[llength $drawn]} {
         return 0
       }
@@ -1950,6 +1996,22 @@ oo::define ::tclpdf::document::document {
     return $column
   }
 
+  # -headingSpacing as the pair {before after} that TextBlockPlace adds: one
+  # value is both, no value is neither. The value has passed
+  # TextBlockDistances by now; it is read as a list, never through [expr].
+  method TextBlockHeadingSpacing {options} {
+    set given [dict get $options headingSpacing]
+    switch -- [llength $given] {
+      0 {
+        return {0 0}
+      }
+      1 {
+        return [list [lindex $given 0] [lindex $given 0]]
+      }
+    }
+    return $given
+  }
+
   # The height that spreads a text evenly over n columns starting at y on
   # the current page - the balance of the last page -, or {} when the text
   # does not fit into the columns at their full height, in which case the
@@ -1978,8 +2040,10 @@ oo::define ::tclpdf::document::document {
     # whole block rather than of what is left.
     set lines [my TextLinesRebase $lines]
     set spacing [dict get $options paragraphSpacing]
+    set headingSpacing [my TextBlockHeadingSpacing $options]
     set maximum [expr {[lindex [my page typeArea] 3] - $y - $lift}]
-    lassign [my TextBlockPlace $lines $leading $spacing {}] -> -> total
+    lassign [my TextBlockPlace $lines $leading $spacing $headingSpacing {}] \
+        -> -> total
     if {$total > $maximum * $columns} {
       return {}
     }
@@ -2004,7 +2068,7 @@ oo::define ::tclpdf::document::document {
       set rest $lines
       for {set column 0} {$column < $columns && [llength $rest]} {incr column} {
         lassign [my TextBlockPlace [my TextLinesRebase $rest] $leading \
-            $spacing $limit] drawn rest -
+            $spacing $headingSpacing $limit] drawn rest -
       }
       if {![llength $rest]} {
         return $limit
@@ -2084,7 +2148,8 @@ oo::define ::tclpdf::document::document {
       set limit [expr {max(0, [lindex [my page typeArea] 3] - $y - $lift)}]
     }
     lassign [my TextBlockPlace $lines $leading \
-        [dict get $options paragraphSpacing] $limit] drawn rest below
+        [dict get $options paragraphSpacing] \
+        [my TextBlockHeadingSpacing $options] $limit] drawn rest below
 
     # A line that is followed by more of the same text - the next line of
     # its paragraph, or the first of the next one - is drawn with a space

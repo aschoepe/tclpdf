@@ -35,7 +35,17 @@
 # price that quietly falls back to plain text because one "*" was
 # forgotten. Where the text comes from people - a form field, a remark -
 # page three shows the way the caller takes on purpose: [repair] writes each
-# refused place as text and names it, and the result is set the strict way. Both translators end in the same list of {text options} pairs
+# refused place as text and names it, and the result is set the strict way.
+#
+# PAGE FOUR, ROOM AROUND A HEADING: a heading takes its own leading and no
+# more, so it stands as close to the paragraph above it as to the one it
+# heads. -headingSpacing {before after} adds a gap above and below every
+# heading - on top of -paragraphSpacing, which stays the gap between the
+# other paragraphs - and none above a heading that opens the block. The
+# page sets one text twice, side by side, without and with it, and prints
+# what [textHeight] measured for each under the column it drew.
+#
+# Both translators end in the same list of {text options} pairs
 # - built by one procedure from one vocabulary - and from there the road is
 # one road, which is what the last line of page two measures rather than
 # claims: the two notations break into the same lines, runs and options
@@ -130,6 +140,38 @@ $doc font -size 8 -color {0.45 0.45 0.45}
 $doc text "Written as text, in this order:" -at [list 20 [expr {$y + 8}]]
 $doc font -family courier -size 7.5 -color black
 $doc text [join [dict get $repair faults] \n] -at [list 20 [expr {$y + 13}]] -width 170
+
+# PAGE FOUR, ROOM AROUND A HEADING: the same Markdown in two columns, the
+# left one with -paragraphSpacing alone, the right one with -headingSpacing
+# beside it - 5 mm above a heading, 1.5 mm under it.
+set sectioned {# Terms of payment
+The amount is payable within 14 days of the invoice date, without deduction. A payment is on time when the amount has reached our account by the due date.
+## Late payment
+After the due date the statutory interest applies, and a reminder is charged at a flat 5.00 EUR.
+## Retention of title
+The goods remain our property until the amount has been paid in full.
+### Place of jurisdiction
+The place of jurisdiction is the seat of the seller.}
+$doc page add
+$doc font -family helvetica -size 14 -style bold -color black
+$doc text "Room around a heading" -at {20 22}
+set columns [list 20 {} 110 {-headingSpacing {5 1.5}}]
+foreach {x gaps} $columns {
+    $doc font -family helvetica -size 8 -style {} -color {0.45 0.45 0.45}
+    set label "-paragraphSpacing 2"
+    if {[llength $gaps]} {
+        set label "-paragraphSpacing 2 [lindex $gaps 0] [list [lindex $gaps 1]]"
+    }
+    $doc text $label -at [list $x 32]
+    $doc font -size 10 -color black
+    set options [list -width 80 -align justify -paragraphSpacing 2 \
+        -markup markdown {*}$gaps]
+    set height [$doc textHeight $sectioned {*}$options]
+    set y [$doc text $sectioned -at [list $x 40] {*}$options]
+    $doc font -size 8 -color {0.45 0.45 0.45}
+    $doc text [format "textHeight %.2f mm, drawn %.2f mm" $height \
+        [expr {$y - 40}]] -at [list $x [expr {$y + 4}]]
+}
 
 exampleFooter $doc
 $doc write $target
