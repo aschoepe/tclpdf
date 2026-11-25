@@ -327,9 +327,13 @@ $doc pageNumbers -at {190 285} -anchor top -align right -format "page %n of %m"
 $doc pageNumbers -at {105 285} -anchor top -align center -format "vol. 1" -family bodyBold -size 7
 # -from leaves leading pages unnumbered, -total states a total of a larger set:
 # $doc pageNumbers -at {20 287} -from 2 -total 12 -format "sheet %n of %m"
+# -to ends the run and -start renumbers it - a section: a 2-page delivery note,
+# a 4-page appendix numbered "1 of 4" to "4 of 4", a copy sheet with no number:
+# $doc pageNumbers -at {190 285} -to 2 -format "Delivery note, page %n of %m"
+# $doc pageNumbers -at {190 285} -from 3 -to 6 -start 1 -format "Appendix page %n of %m"
 ```
 
-Each call is independent and takes the font options on its own. `%n` is the number, `%m` the total. `-anchor baseline|top|middle|bottom` means what it means for `text` (default `baseline`) and is checked at the call. Above the middle of the page it becomes a `Pagination Header` artifact, below a `Footer`. Printed numbers and page labels have to agree - see `08-navigation-metadata.md`.
+Each call is independent and takes the font options on its own. `%n` is the number, `%m` the total. `-anchor baseline|top|middle|bottom` means what it means for `text` (default `baseline`) and is checked at the call. `-to` (last page, counted from 1 like `-from`; default the last page) and `-start` (the number printed on page `-from`; default `-from`) number a section, and `%m` is then the number on the run's last page, `-start + (-to - -from)`, unless `-total` says otherwise - so no trial document is needed to learn how long the part before it is: take `[$doc page count]` after drawing each part (example `04.06`). A `-to` before `-from` is refused at the call, a `-to` past the last page at the write (`TCLPDF PAGENUMBER PAGE`), never cut short. Above the middle of the page it becomes a `Pagination Header` artifact, below a `Footer`. Printed numbers and page labels have to agree - see `08-navigation-metadata.md`.
 
 ```tcl
 $doc write [file join $out ref-03-text.pdf]

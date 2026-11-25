@@ -9,6 +9,8 @@
 # of this file (MIT License).
 #
 #   $doc pageNumbers -at {105 285} -align center -size 8
+#   $doc pageNumbers -at {105 285} -from 3 -to 6 -start 1 \
+#       -format "Appendix page %n of %m"
 #
 # The problem this solves is one of order: while page three is being drawn,
 # nobody knows yet that there will be seven. Writing the number at that moment
@@ -40,19 +42,29 @@ namespace eval ::tclpdf::pageNumber {}
 oo::define ::tclpdf::document::document {
 
   # $doc pageNumbers -at {x y} ?-format "Page %n of %m"? ?-align center?
-  #                  ?-anchor top? ?-from 2? ?-total 7? ?font options?
+  #                  ?-anchor top? ?-from 2? ?-to 6? ?-start 1? ?-total 7?
+  #                  ?font options?
   #
   # %n is the page number, %m the total. -from skips the leading pages, which
   # is how a title page stays unnumbered; the count itself still includes them
   # unless -total says otherwise, because "Page 2 of 7" on the second sheet of
-  # seven is what a reader expects. -anchor is [text]'s: where the y of -at
-  # lands on the line, so a number can share the top or bottom edge of a
-  # footer set with [text -anchor] instead of its baseline being worked out
-  # by hand.
+  # seven is what a reader expects.
+  #
+  # -to and -start make the run a SECTION: -to is the last page it numbers,
+  # counted from 1 as -from is, and -start the number printed on the page
+  # -from. "Appendix page 1 of 4" on sheets three to six of a delivery note,
+  # with a copy sheet behind them, is "-from 3 -to 6 -start 1" - and %m is
+  # then the number on the last page of the run, -start + (-to - -from).
+  # Without the two it is exactly what it always was: -to defaults to the last
+  # page and -start to -from, which makes that sum the page count.
+  #
+  # -anchor is [text]'s: where the y of -at lands on the line, so a number can
+  # share the top or bottom edge of a footer set with [text -anchor] instead
+  # of its baseline being worked out by hand.
   method pageNumbers {args} {
     my TextInit
     set defaults {at {} format "Page %n of %m" align left anchor baseline
-        from 1 total {}}
+        from 1 to {} start {} total {}}
     foreach name $::tclpdf::text::stateOptions {
       dict set defaults $name [my TextGet $name]
     }
@@ -65,7 +77,7 @@ oo::define ::tclpdf::document::document {
     # The numbers of this call read in decimal before they are checked
     # (pdfObj.tcl, [decimal]): -total 010 is ten pages under Tcl 8.6 as under
     # Tcl 9. The text options are [text]'s and read there.
-    set options [::tclpdf::option decimals $options {at from total}]
+    set options [::tclpdf::option decimals $options {at from to start total}]
     # [option point] rather than a word count of its own, which is what stood
     # here: it counted the words and let every value through - "-at {a b}",
     # "-at {NaN 10}" and "-at {1e39 10}" were taken by the call and refused
@@ -81,6 +93,28 @@ oo::define ::tclpdf::document::document {
       return -code error -errorcode [list TCLPDF PAGENUMBER ARGUMENT from] \
           "tclpdf: -from is a page number counted from 1, got\
           \"[dict get $options from]\""
+    }
+    # -to and -start at the call as well, and for the same reason: the range
+    # is drawn at write time, where a refusal would name [write]. Empty is
+    # their default - the last page and -from - and is resolved there. Whether
+    # -to lies within the document can only be asked at write time, because
+    # the call may come before the pages it numbers; that it does not lie
+    # before -from can be asked now.
+    set to [dict get $options to]
+    if {$to ne {} && (![string is integer -strict $to] || $to < 1)} {
+      return -code error -errorcode [list TCLPDF PAGENUMBER ARGUMENT to] \
+          "tclpdf: -to is a page number counted from 1, got \"$to\""
+    }
+    if {$to ne {} && $to < [dict get $options from]} {
+      return -code error -errorcode [list TCLPDF PAGENUMBER ARGUMENT to] \
+          "tclpdf: -to $to lies before -from [dict get $options from] -\
+          the run numbers the pages from -from to -to"
+    }
+    set start [dict get $options start]
+    if {$start ne {} && (![string is integer -strict $start] || $start < 1)} {
+      return -code error -errorcode [list TCLPDF PAGENUMBER ARGUMENT start] \
+          "tclpdf: -start is the number printed on the page -from, a whole\
+          number of 1 or more, got \"$start\""
     }
     # Both checked at the CALL. The number is drawn at write time, and a
     # value refused only there names [write] rather than the call that
@@ -131,16 +165,43 @@ oo::define ::tclpdf::document::document {
 
   method PageNumberWrite {} {
     set state [my state pageNumbers]
-    set placed [dict get $state placed]
     set pages [my page count]
+    # A -to past the last page is refused, not cut short: "Appendix page 4 of
+    # 4" missing from a document one sheet short is a mistake the reader of
+    # the paper finds, and the caller never would. Asked of every run before
+    # any is drawn, so that no run is half placed when the write stops. A
+    # -from past the last page without -to numbers nothing, as it always did.
+    foreach run [dict get $state runs] {
+      set to [dict get $run to]
+      if {$to ne {} && $to > $pages} {
+        return -code error -errorcode [list TCLPDF PAGENUMBER PAGE $to] \
+            "tclpdf: pageNumbers -to $to names a page the document does not\
+            have - it has $pages page(s); add the pages, or end the run\
+            earlier"
+      }
+    }
     set index 0
     foreach run [dict get $state runs] {
-      set total [expr {[dict get $run total] eq {} ? $pages : [dict get $run total]}]
-      for {set page 0} {$page < $pages} {incr page} {
-        set number [expr {$page + 1}]
-        if {$number < [dict get $run from]} {
-          continue
-        }
+      set from [dict get $run from]
+      set to [dict get $run to]
+      if {$to eq {}} {
+        set to $pages
+      }
+      set start [dict get $run start]
+      if {$start eq {}} {
+        set start $from
+      }
+      # The total of the run is the number on its last page. -total has
+      # passed [string is integer] and [decimals], so it is a number, and
+      # [expr] gives it in decimal: -total 0x10 prints 16, as it always has.
+      set total [dict get $run total]
+      if {$total eq {}} {
+        set total [expr {$start + $to - $from}]
+      } else {
+        set total [expr {$total}]
+      }
+      for {set page [expr {$from - 1}]} {$page < $to} {incr page} {
+        set number [expr {$start + $page + 1 - $from}]
         my PageNumberOne $run $page $number $total $index
       }
       incr index

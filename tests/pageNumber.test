@@ -542,4 +542,207 @@ test pageNumber-9.7 {-anchor leaves head or foot to the y of -at} -body {
   list [regexp -all {/Subtype /Header} $bytes] [regexp -all {/Subtype /Footer} $bytes]
 } -result {1 1}
 
+# --- -to and -start: a numbered section --------------------------------------
+#
+# Until 2026-11-25 a run numbered every page from -from to the last, and %n was
+# the absolute page number: "Appendix page n of m" on sheets three to six of a
+# delivery note with a copy sheet behind them came out as "3 of 4" ... "6 of
+# 4", and "7 of 4" on the copy. -to ends the run, -start says what the page
+# -from is called, and %m without -total is the number on the run's last page.
+
+# A document of seven pages - two of delivery note, four of appendix, one copy -
+# with SCRIPT run against it as $doc, written once. {doc bytes}: the document
+# is still open, so that the content of its pages can be asked.
+proc ::pageNumberTest::section {script} {
+  set doc [tclpdf new -unit mm -compress 0]
+  foreach what {note note appendix appendix appendix appendix copy} {
+    $doc page add
+    $doc text $what -at {20 30}
+  }
+  uplevel 1 [list set doc $doc]
+  uplevel 1 $script
+  set path [::tclpdfTest::scratch pageNumber-section-[pid].pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  return [list $doc $bytes]
+}
+
+# For each page of DOC, how many page numbers its content invokes: the number
+# of "/XOPN... Do" operators, which is what [PageNumberOne] puts on a page.
+proc ::pageNumberTest::invoked {doc} {
+  set counts {}
+  for {set page 0} {$page < [$doc page count]} {incr page} {
+    lappend counts [regexp -all {/XOPN[0-9_]+ Do} \
+        [::tclpdfTest::content $doc $page]]
+  }
+  return $counts
+}
+
+# The labels drawn, in the order the forms were written.
+proc ::pageNumberTest::labels {bytes} {
+  set labels {}
+  foreach {match label} [regexp -all -inline {\(([^()]*)\) Tj} $bytes] {
+    if {[string match "Appendix*" $label] || [string match "Note*" $label]} {
+      lappend labels $label
+    }
+  }
+  return $labels
+}
+
+test pageNumber-10.1 {-from 3 -to 6 -start 1 numbers the appendix 1 to 4 of 4, and not the copy} -body {
+  lassign [::pageNumberTest::section {
+    $doc pageNumbers -at {105 285} -align center -from 3 -to 6 -start 1 \
+        -format "Appendix page %n of %m"
+  }] doc bytes
+  set result [list [::pageNumberTest::labels $bytes] \
+      [::pageNumberTest::invoked $doc]]
+  $doc destroy
+  set result
+} -result {{{Appendix page 1 of 4} {Appendix page 2 of 4} {Appendix page 3 of 4} {Appendix page 4 of 4}} {0 0 1 1 1 1 0}}
+
+test pageNumber-10.2 {-to without -start counts absolutely, and %m is -to} -body {
+  lassign [::pageNumberTest::section {
+    $doc pageNumbers -at {105 285} -from 3 -to 6 -format "Appendix %n/%m"
+  }] doc bytes
+  set result [list [::pageNumberTest::labels $bytes] \
+      [::pageNumberTest::invoked $doc]]
+  $doc destroy
+  set result
+} -result {{{Appendix 3/6} {Appendix 4/6} {Appendix 5/6} {Appendix 6/6}} {0 0 1 1 1 1 0}}
+
+test pageNumber-10.3 {-start without -to runs to the last page, and -total wins over the computed %m} -body {
+  # -start alone: the run still ends on the last page, and %m follows the
+  # renumbering - 1 to 5 of 5. -total states a total of its own and is
+  # printed as given, whatever the range would have made of it.
+  lassign [::pageNumberTest::section {
+    $doc pageNumbers -at {105 285} -from 3 -start 1 -format "Appendix %n/%m"
+    $doc pageNumbers -at {105 280} -from 3 -to 6 -start 1 -total 9 \
+        -format "Note %n/%m"
+  }] doc bytes
+  set result [list [::pageNumberTest::labels $bytes] \
+      [::pageNumberTest::invoked $doc]]
+  $doc destroy
+  set result
+} -result {{{Appendix 1/5} {Appendix 2/5} {Appendix 3/5} {Appendix 4/5} {Appendix 5/5} {Note 1/9} {Note 2/9} {Note 3/9} {Note 4/9}} {0 0 2 2 2 2 1}}
+
+test pageNumber-10.4 {-start 010 is ten and -to 006 is six, under Tcl 8.6 as under Tcl 9} -body {
+  # Read in decimal like -from and -total (option.tcl, [decimals]); under 8.6
+  # a bare [expr] would have read 010 as eight and refused 008 outright.
+  lassign [::pageNumberTest::section {
+    $doc pageNumbers -at {105 285} -from 03 -to 006 -start 010 \
+        -format "Appendix %n/%m"
+  }] doc bytes
+  set result [list [::pageNumberTest::labels $bytes] \
+      [::pageNumberTest::invoked $doc]]
+  $doc destroy
+  set result
+} -result {{{Appendix 10/13} {Appendix 11/13} {Appendix 12/13} {Appendix 13/13}} {0 0 1 1 1 1 0}}
+
+test pageNumber-10.5 {a -to before -from, and a -to or -start that is no number of 1 or more, are refused at the call} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc page add
+  set codes {}
+  foreach {call pattern} {
+    {-from 3 -to 2} {-to 2 lies before -from 3}
+    {-to 0} {-to is a page number counted from 1, got "0"}
+    {-to abc} {-to is a page number counted from 1, got "abc"}
+    {-to 2.5} {-to is a page number counted from 1, got "2.5"}
+    {-start 0} {-start is the number printed on the page -from, a whole number of 1 or more, got "0"}
+    {-start -4} {-start is the number printed on the page -from, a whole number of 1 or more, got "-4"}
+    {-start x} {-start is the number printed on the page -from, a whole number of 1 or more, got "x"}
+  } {
+    set code [::tclpdfTest::refusalCode {
+      $doc pageNumbers -at {100 280} {*}$call
+    }]
+    catch {$doc pageNumbers -at {100 280} {*}$call} message
+    lappend codes $code [regexp -- $pattern $message]
+  }
+  # Nothing was recorded by the refused calls: a write draws no number.
+  set path [::tclpdfTest::scratch pagenumber-range-refused.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  list $codes [regexp {XOPN} $bytes]
+} -result {{{TCLPDF PAGENUMBER ARGUMENT to} 1 {TCLPDF PAGENUMBER ARGUMENT to} 1 {TCLPDF PAGENUMBER ARGUMENT to} 1 {TCLPDF PAGENUMBER ARGUMENT to} 1 {TCLPDF PAGENUMBER ARGUMENT start} 1 {TCLPDF PAGENUMBER ARGUMENT start} 1 {TCLPDF PAGENUMBER ARGUMENT start} 1} 0}
+
+test pageNumber-10.6 {a -to past the last page is refused by the write, not cut short} -body {
+  # The call may come before the pages it numbers, so the question can only
+  # be asked at write time. Asked of every run before any is placed: the run
+  # before the refused one leaves nothing on the pages either. And the
+  # document is not spoilt - with the missing page added, it writes.
+  set doc [tclpdf new -unit mm -compress 0]
+  foreach n {1 2 3} {
+    $doc page add
+  }
+  $doc pageNumbers -at {105 285} -format "%n/%m"
+  $doc pageNumbers -at {105 280} -from 2 -to 4 -start 1 -format "A %n/%m"
+  set path [::tclpdfTest::scratch pagenumber-to-beyond.pdf]
+  set code [::tclpdfTest::refusalCode {$doc write $path}]
+  catch {$doc write $path} message
+  set refused [list $code [file exists $path] \
+      [regexp {pageNumbers -to 4 names a page the document does not have - it has 3 page\(s\)} $message] \
+      [::pageNumberTest::invoked $doc]]
+  file delete $path
+  $doc page add
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  set after [::pageNumberTest::invoked $doc]
+  $doc destroy
+  list $refused $after [regexp {\(A 3/3\)} $bytes] [regexp {\(4/4\)} $bytes]
+} -result {{{TCLPDF PAGENUMBER PAGE 4} 0 1 {0 0 0}} {1 2 2 2} 1 1}
+
+test pageNumber-10.7 {a -from past the last page without -to still numbers nothing, as it always did} -body {
+  # The contrast to 10.6: without -to the run ends on the last page, and a
+  # range that begins behind it is empty rather than wrong.
+  lassign [::pageNumberTest::section {
+    $doc pageNumbers -at {105 285} -from 9 -format "Appendix %n/%m"
+  }] doc bytes
+  set result [::pageNumberTest::invoked $doc]
+  $doc destroy
+  set result
+} -result {0 0 0 0 0 0 0}
+
+test pageNumber-10.8 {two runs with different ranges: each its own forms and its own numbers} -body {
+  # The delivery note counts its own two sheets, the appendix its four; the
+  # copy sheet carries neither. The forms are named by run and page, so the
+  # two runs cannot overwrite each other, and a second write is the same file.
+  set doc [tclpdf new -unit mm -compress 0]
+  foreach n {1 2 3 4 5 6 7} {
+    $doc page add
+  }
+  $doc pageNumbers -at {190 285} -align right -to 2 -format "Note page %n of %m"
+  $doc pageNumbers -at {105 285} -align center -from 3 -to 6 -start 1 \
+      -format "Appendix page %n of %m"
+  lassign [::tclpdfTest::writeTwice $doc sections] a b
+  set result [list [expr {$a eq $b}] [::pageNumberTest::labels $a] \
+      [::pageNumberTest::invoked $doc] \
+      [lsort -unique [regexp -all -inline {XOPN[0-9]+_[0-9]+} $a]]]
+  $doc destroy
+  set result
+} -result {1 {{Note page 1 of 2} {Note page 2 of 2} {Appendix page 1 of 4} {Appendix page 2 of 4} {Appendix page 3 of 4} {Appendix page 4 of 4}} {1 1 1 1 1 1 0} {XOPN0_0 XOPN0_1 XOPN1_2 XOPN1_3 XOPN1_4 XOPN1_5}}
+
+test pageNumber-10.9 {-to and -start at their defaults write the file a call without them writes} -body {
+  # -to defaults to the last page and -start to -from, which makes %m the
+  # page count: an existing document keeps its bytes. Measured against the
+  # file of 1.7.3 as well (pinned documents and example 04.02, cmp).
+  ::tclpdfTest::sameBytes {
+    $doc page add
+    $doc page add
+    $doc pageNumbers -at {300 820} -align center -size 8
+    $doc pageNumbers -at {20 20} -family times -from 2 -format "%n of %m"
+    $doc pageNumbers -at {20 30} -from 2 -total 7
+  } {
+    $doc page add
+    $doc page add
+    $doc pageNumbers -at {300 820} -align center -size 8 -to 3 -start 1
+    $doc pageNumbers -at {20 20} -family times -from 2 -format "%n of %m" \
+        -to 3 -start 2
+    $doc pageNumbers -at {20 30} -from 2 -total 7 -to 3 -start 2
+  }
+} -result same
+
 cleanupTests
