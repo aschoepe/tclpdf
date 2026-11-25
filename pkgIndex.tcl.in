@@ -77,7 +77,7 @@ package ifneeded @PACKAGE_NAME@::markPos 1.3 [list source [file join $dir markPo
 package ifneeded @PACKAGE_NAME@::option 1.4 [list source [file join $dir option.tcl]]
 package ifneeded @PACKAGE_NAME@::otLayout 1.4 [list source [file join $dir otLayout.tcl]]
 package ifneeded @PACKAGE_NAME@::outline 1.8 [list source [file join $dir outline.tcl]]
-package ifneeded @PACKAGE_NAME@::output 1.9 [list source [file join $dir output.tcl]]
+package ifneeded @PACKAGE_NAME@::output 1.10 [list source [file join $dir output.tcl]]
 package ifneeded @PACKAGE_NAME@::page 1.8 [list source [file join $dir page.tcl]]
 package ifneeded @PACKAGE_NAME@::pageLabel 1.4 [list source [file join $dir pageLabel.tcl]]
 package ifneeded @PACKAGE_NAME@::pageNumber 1.8 [list source [file join $dir pageNumber.tcl]]

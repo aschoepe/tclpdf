@@ -246,6 +246,19 @@ oo::define ::tclpdf::document::document {
       dict set tclpdfInfo CreationDate \
           [::tclpdf::pdfObj date [my Created] [$tclpdfWriter version]]
     }
+    # ModDate the same way and from the same [my Created], which is the
+    # moment the packet's xmp:ModifyDate names when the caller set no
+    # ModDate (xmp.tcl, [packet]) - so the pair agrees to the second and the
+    # zone. Not copied from CreationDate: a CreationDate the caller set is
+    # theirs, and the packet does not take it for xmp:ModifyDate either.
+    # Measured 2026-11-25: a document without [info] wrote xmp:ModifyDate
+    # and no ModDate, although ISO 32000-2, 14.3.3 keeps exactly these two
+    # dates in the Info dictionary. Stored back like CreationDate, so a
+    # second write stays byte-identical.
+    if {![dict exists $tclpdfInfo ModDate]} {
+      dict set tclpdfInfo ModDate \
+          [::tclpdf::pdfObj date [my Created] [$tclpdfWriter version]]
+    }
     set pairs {}
     dict for {key value} $tclpdfInfo {
       # Trapped is the one entry of Table 317 that is a NAME - /True, /False
@@ -292,4 +305,4 @@ oo::define ::tclpdf::document::document {
 
 }
 
-package provide tclpdf::output 1.9
+package provide tclpdf::output 1.10

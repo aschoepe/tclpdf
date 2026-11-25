@@ -89,7 +89,7 @@ puts "title: [$doc info Title]"
 $doc language de-DE                               ;# RFC 3066; PDF/A-3a and PDF/UA require it
 ```
 
-Every text key is mirrored into the XMP packet under its Table 317 property (`dc:title`, `dc:creator`, `pdf:Keywords`, `xmp:CreatorTool`, `pdf:Producer`); the two dates as `xmp:CreateDate`/`xmp:ModifyDate`. `Trapped` (`True False Unknown`) is not mirrored.
+Every text key is mirrored into the XMP packet under its Table 317 property (`dc:title`, `dc:creator`, `pdf:Keywords`, `xmp:CreatorTool`, `pdf:Producer`); the two dates as `xmp:CreateDate`/`xmp:ModifyDate`. Either date left unset is stamped at the first write - the same second and zone in the dictionary and the packet - and kept, so a second write gives the same bytes. `Trapped` (`True False Unknown`) is not mirrored.
 
 ## The XMP packet: schema, raw XML, or the whole packet
 

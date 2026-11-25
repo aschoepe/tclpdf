@@ -265,10 +265,13 @@ test attach-3.8 {an explicit -date wins over the file's modification time} -body
   $doc destroy
   set bytes [::tclpdfTest::readBytes $path]
   file delete $source $path
-  # The given date, and exactly one /ModDate - the mtime is not written
-  # beside it.
+  # The given date, and exactly one /ModDate in /Params - the mtime is not
+  # written beside it. Counted inside /Params: the Info dictionary carries a
+  # /ModDate of its own since 2026-11-25.
+  set params {}
+  regexp {/Params << ([^>]*) >>} $bytes -> params
   list [regexp {/Params << /Size 6 /ModDate \(D:20260812093000\+02'00'\) >>} \
-      $bytes] [regexp -all {/ModDate} $bytes]
+      $bytes] [regexp -all {/ModDate} $params]
 } -result {1 1}
 
 test attach-3.9 {the default follows the file version into the 2.0 spelling} -body {

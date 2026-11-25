@@ -90,10 +90,12 @@ try {
 
 # One document of the comparison: the drawing, a Lab swatch and a paragraph
 # hyphenated with the pattern file, uncompressed and dated, so that two of
-# them made a second apart differ only in the file identifier.
+# them made a second apart differ only in the file identifier. Both dates:
+# the package stamps whichever is left unset with the moment of the write.
 proc comparisonBytes {path svg lab tag} {
     set doc [tclpdf new -unit mm -compress 0]
     $doc info CreationDate "D:20260101000000+01'00'"
+    $doc info ModDate "D:20260101000000+01'00'"
     $doc page add
     $doc svg -data $svg -at {20 20} -width 80
     $doc rect -at {110 20} -size {30 20} -fill $lab

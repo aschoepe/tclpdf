@@ -356,6 +356,102 @@ test xmp-5.5 {a second write is byte-identical} -body {
   set same
 } -result 1
 
+test xmp-5.6 {without info, ModDate is written and names the moment xmp:ModifyDate names} -constraints {haveFace haveTdom} -body {
+  # The packet always carried xmp:ModifyDate; the Info dictionary carried
+  # CreationDate alone (measured 2026-11-25) although ISO 32000-2, 14.3.3
+  # keeps exactly these two dates there. Both now come from [Created], and
+  # the comparison goes through [stampFromPdf] - the conversion the packet
+  # applies to a ModDate the caller set - so the two have to name the same
+  # second in the same zone. Compared as text.
+  set doc [probe $face]
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-moddate.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  set modDate {}
+  set m [regexp {/ModDate \((D:[^)]*)\)} $bytes -> modDate]
+  set c [regexp {/CreationDate \((D:[^)]*)\)} $bytes -> creationDate]
+  regexp {<xmp:ModifyDate>([^<]*)<} $bytes -> modified
+  set result [list $m $c [string equal [::tclpdf::xmp::stampFromPdf $modDate] $modified] \
+      [string equal $modDate $creationDate] [::tclpdfTest::verapdf $path 3b]]
+  file delete $path
+  set result
+} -result {1 1 1 1 ok}
+
+test xmp-5.7 {a CreationDate the caller set is not taken for ModDate} -constraints {haveFace haveTdom} -body {
+  # The stamped ModDate is the document's own moment, as xmp:ModifyDate is
+  # when no ModDate was set - copying the caller's CreationDate would date a
+  # file written today to 2019 on one side of Table 317 and not the other.
+  set doc [probe $face]
+  $doc info CreationDate "D:20190101120000+01'00'"
+  $doc pdfa -part 3 -conformance B
+  set path [::tclpdfTest::scratch xmp-moddate-own.pdf]
+  $doc write $path
+  set asked [$doc info ModDate]
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  set modDate {}
+  set m [regexp {/ModDate \((D:[^)]*)\)} $bytes -> modDate]
+  regexp {<xmp:ModifyDate>([^<]*)<} $bytes -> modified
+  set result [list $m [string match D:2019* $modDate] \
+      [string equal [::tclpdf::xmp::stampFromPdf $modDate] $modified] \
+      [string equal $asked $modDate] [::tclpdfTest::verapdf $path 3b]]
+  file delete $path
+  set result
+} -result {1 0 1 1 ok}
+
+test xmp-5.8 {a ModDate the caller set wins, in the spelling of the file's version} -body {
+  # The same road as CreationDate (xmp-8.5b, ua-9.1): what the caller set is
+  # kept and respelled for the version the file has at write time, and the
+  # stamped one is spelled for that version from the start - 2.0 without the
+  # apostrophe after the minutes.
+  set out {}
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc info ModDate D:20200202130000+01'00'
+  $doc configure -version 2.0
+  $doc page add
+  set path [::tclpdfTest::scratch xmp-moddate-set.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  lappend out [$doc info ModDate] [regexp -all {/ModDate } $bytes] \
+      [regexp {/ModDate \(D:20200202130000\+01'00\)} $bytes]
+  $doc destroy
+  file delete $path
+  foreach version {1.7 2.0} {
+    set doc [tclpdf new -unit mm -compress 0 -version $version]
+    $doc page add
+    set path [::tclpdfTest::scratch xmp-moddate-$version.pdf]
+    $doc write $path
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    lappend out [regexp {/ModDate \(D:\d{14}[-+]\d\d'\d\d'\)} $bytes] \
+        [regexp {/ModDate \(D:\d{14}[-+]\d\d'\d\d\)} $bytes]
+  }
+  set out
+} -result {D:20200202130000+01'00' 1 1 1 0 0 1}
+
+test xmp-5.9 {a second write keeps ModDate and stays byte-identical} -constraints haveTdom -body {
+  # The stamped ModDate is stored back as CreationDate is. On the second
+  # write the packet takes it as a SET ModDate and converts it - so this is
+  # also the proof that the conversion lands on the same text the first
+  # write stamped. The setup is xmp-6.4's: no embedded face, which never
+  # writes twice identically.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc text "x" -at {20 20}
+  oo::objdefine $doc method ProbeXmp {} {return {{text part 3}}}
+  $doc xmpSchema probe http://example.org/probe/ {part} ProbeXmp
+  lassign [::tclpdfTest::writeTwice $doc xmp-moddate-twice] first second
+  $doc destroy
+  set modDate {}
+  set m [regexp {/ModDate \((D:[^)]*)\)} $second -> modDate]
+  regexp {<xmp:ModifyDate>([^<]*)<} $second -> modified
+  list [string equal $first $second] $m \
+      [string equal [::tclpdf::xmp::stampFromPdf $modDate] $modified]
+} -result {1 1 1}
+
 # --- the packet follows the document -----------------------------------------
 #
 # The packet is rebuilt on every write. It used to be built once and left

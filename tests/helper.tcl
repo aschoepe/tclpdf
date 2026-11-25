@@ -50,9 +50,11 @@ proc ::tclpdfTest::readBytes {path} {
 }
 
 # The bytes of a document made by SCRIPT, which sees the document as $doc.
-# Uncompressed, so a difference shows in the content, and with a fixed
-# creation date and file identifier, so two documents made a second apart
-# are the same file. OPTIONS go to [tclpdf new].
+# Uncompressed, so a difference shows in the content, and with fixed dates
+# and file identifier, so two documents made a second apart are the same
+# file - both dates, since the package stamps whichever is left unset with
+# the moment of the write (ModDate too since 2026-11-25). OPTIONS go to
+# [tclpdf new].
 #
 # Shared by decimal.test and fileDecimal.test, which compare a document
 # written with leading zeros against the same one without them - the two
@@ -60,6 +62,7 @@ proc ::tclpdfTest::readBytes {path} {
 proc ::tclpdfTest::fixedBytes {script {options {}}} {
   set doc [tclpdf new -compress 0 -unit pt {*}$options]
   $doc info CreationDate "D:20260101000000+01'00'"
+  $doc info ModDate "D:20260101000000+01'00'"
   [$doc writer] id [string repeat \x01 16]
   try {
     $doc page add
