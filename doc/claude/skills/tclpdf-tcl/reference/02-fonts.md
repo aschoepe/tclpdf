@@ -25,7 +25,7 @@ $doc text "2" -at {24 40} -rise -2 -size 7                     ;# subscript, per
 $doc text "O" -at {27 40}
 ```
 
-Every option is checked where it is written: a `-size` or `-stretch` of 0 or less, a `-leading` that is not a number above zero, an unknown `-color` are refused at the call - not at the next piece of text.
+Every option is checked where it is written: a `-size` or `-stretch` of 0 or less, a `-leading` that is not a number above zero, an unknown `-color` are refused at the call - not at the next piece of text. `-leading` is in **points** (`14` above), where the table style key `leading` is a **factor** of the size (`1.15`); a paragraph of two lines or more refuses a leading under half its size (`TCLPDF TEXT LEADING`), which is what `-leading 1.3` at 10 pt would be - the message names the `-leading 13` that was meant.
 
 ## The fourteen standard faces
 

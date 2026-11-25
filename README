@@ -63,6 +63,10 @@ DOCUMENTATION
 
     doc/tclpdf.md   the manual - "make all" makes .n and .html (pandoc)
     doc/PLUGINS.md  extending tclpdf without touching its source
+    doc/claude/skills/tclpdf-tcl/
+                    the skill for coding agents: SKILL.md and reference/,
+                    copied as a whole directory; check.tcl runs its code
+                    against your copy of the package (doc/claude/TCLPDF.md)
     examples/       scripts, each saying in its header what it shows
     Wiki            https://fossil.sowaswie.de/tclpdf - manual, finished
                     example PDFs, technical notes

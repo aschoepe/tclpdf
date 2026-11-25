@@ -39,7 +39,10 @@ set body "A paragraph is asked for with -width. The line breaks at spaces and\
     Justification stretches the U+0020 gaps only.\n\nA line feed separates paragraphs\
     inside one call, and -paragraphSpacing adds room between them."
 
-# Returns the y under the last line - the next block continues there.
+# Returns the y where the NEXT line's baseline would sit - the last baseline
+# plus one leading, not the bottom of the letters; it is the y given plus
+# [textHeight] with the same options. A block set there with the default
+# -anchor baseline continues the paragraph.
 set y [$doc text $body -at {20 50} -width 80 -align justify -anchor top \
     -paragraphSpacing 2 -firstIndent 5]
 puts "the paragraph ends at y = [format %.1f $y]"
@@ -179,7 +182,9 @@ package require tclpdf::hyphenate      ;# a package command, so it is required h
 # published set carries terms of its own (LGPL, LPPL, BSD-style) and this
 # package is MIT. The caller loads the file from wherever the machine keeps
 # it - /usr/share/hyphen/ on most Linux systems, a LibreOffice dictionary
-# extension on macOS and Windows - and the licence stays with the file.
+# extension on macOS and Windows - and the licence stays with the file. On
+# Debian and its derivatives the German set is the package hyphen-de, which
+# puts hyph_de_DE.dic into /usr/share/hyphen/.
 # $hyphenPatterns is a libhyphen .dic; assets.tcl says where it points.
 if {[info exists hyphenPatterns] && [file exists $hyphenPatterns]} {
     # -left/-right are how many letters must stay on either side of a break.
@@ -226,7 +231,7 @@ if {[info exists hyphenPatterns] && [file exists $hyphenPatterns]} {
 }
 ```
 
-What hyphenation buys is the word spaces of a narrow justified column, not usually a line. Soft hyphens the text already carries **win outright** over the patterns - it is one source or the other, never both. The hyphen that appears at a break is a real U+002D; in a tagged document it sits in a `Span` with an empty `ActualText`, so extracting the line gives the word back whole. `-hyphenate` is taken by `textLines` and `textHeight` as well, so a block is measured the way it will be set.
+What hyphenation buys is the word spaces of a narrow justified column, not usually a line: without `-hyphenate`, `-align justify` stretches the gaps however wide they get - 35.3 mm against a 1.12 mm space, measured in a 60 mm column of DejaVu Sans at 10 pt, where a long compound moved to the next line. Soft hyphens the text already carries **win outright** over the patterns - it is one source or the other, never both. The hyphen that appears at a break is a real U+002D; in a tagged document it sits in a `Span` with an empty `ActualText`, so extracting the line gives the word back whole. `-hyphenate` is taken by `textLines` and `textHeight` as well, so a block is measured the way it will be set.
 
 ## Flowing around shapes
 

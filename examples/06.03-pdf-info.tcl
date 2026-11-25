@@ -131,7 +131,7 @@ foreach intent [dict get $facts outputIntents] {
             {, profile embedded} : {}}]"
 }
 foreach {key caption} {Title title Author author Producer producer
-        CreationDate created} {
+        CreationDate created ModDate modified} {
     if {[dict exists $facts info $key]} {
         fact $doc y $caption [dict get $facts info $key]
     }

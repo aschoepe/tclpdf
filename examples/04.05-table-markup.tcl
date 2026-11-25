@@ -35,7 +35,8 @@
 # and leading where the lines of a cell are one leading. A notation left
 # open is refused as [text -markup] refuses it; nothing falls back to plain
 # text in silence. The caller who wants that fallback writes it, in the
-# didParseCell hook at the foot of this file.
+# didParseCell hook at the foot of this file - and a second hook there keeps
+# the words of a heading as a bold line.
 #
 # A LIST IS NOT REFUSED. A list item keeps the size and leading of the cell
 # and only moves its lines in by its marker, so it is a paragraph in the
@@ -155,6 +156,41 @@ set y [$doc table -at [list 20 [expr {$y + 11}]] -width 170 -theme plain \
     -body {{"2026-09-09" "a **closed** run sets" 1} {"2026-09-10" "an *open run is set as typed" 1}} \
     -columns {{width 24} {markup markdown} {width 18 align decimal}} \
     -style {family helvetica size 9} -didParseCell plainWhereRefused]
+
+# A HEADING THE CELL CANNOT HAVE, kept as words: the same hook translates
+# the text itself, turns every "heading" in the pairs into "style bold" and
+# hands the pairs back as runs - text emptied, markup taken off the cell, so
+# the column's "markup markdown" does not meet the runs. The line keeps the
+# cell's size and leading, and a tagged document gets no heading element.
+proc headingAsBold {cell doc} {
+    if {[dict get $cell section] ne "body" || [dict get $cell column] != 1
+            || [catch {::tclpdf::markdown::parse [dict get $cell text]} pairs]} {
+        return $cell
+    }
+    set runs {}
+    set found 0
+    foreach {piece options} $pairs {
+        if {[dict exists $options heading]} {
+            dict unset options heading
+            dict set options style bold
+            set found 1
+        }
+        lappend runs $piece $options
+    }
+    if {$found} {
+        dict set cell runs $runs
+        dict set cell text {}
+        dict unset cell markup
+    }
+    return $cell
+}
+$doc font -family helvetica -style bold -size 10
+$doc text "A heading in a cell, set as a bold line: didParseCell" \
+    -at [list 20 [expr {$y + 8}]]
+set y [$doc table -at [list 20 [expr {$y + 13}]] -width 170 -theme plain \
+    -body {{"2026-09-11" "## Service visit\nmonthly, **on site**" 2}} \
+    -columns {{width 24} {markup markdown} {width 18 align decimal}} \
+    -style {family helvetica size 9} -didParseCell headingAsBold]
 
 exampleFooter $doc
 $doc write $target

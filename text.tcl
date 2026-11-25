@@ -385,6 +385,9 @@ oo::define ::tclpdf::document::document {
   # the paragraph methods of textBlock.tcl take over.
   method text {string args} {
     my TextInit
+    # The string as the caller wrote it - the intake below turns runs and
+    # markup into one string; TextLeading counts lines from what was given.
+    set given $string
     # Own options plus the font options, which are accepted per call without
     # being stored - partition keeps the two apart instead of merging the
     # dictionaries and losing track of which is which.
@@ -527,6 +530,7 @@ oo::define ::tclpdf::document::document {
       # This is the facade rule in practice - a caller says "text with a
       # width" and does not need to know that two files are involved.
       package require tclpdf::textBlock
+      my TextLeading $state $given $args
       set options [my TextBlockCheck $options]
     } else {
       # Alignment of a single line is a shift of the starting point - there
@@ -1272,6 +1276,50 @@ oo::define ::tclpdf::document::document {
   # sequence than [textWidth] measured if anything ever had.
   method TextEncode {font string} {
     return [::tclpdf::afm bytes $font $string]
+  }
+
+  # A LEADING UNDER HALF THE SIZE, in a paragraph of two lines or more, is
+  # refused (since 2026-11-25). -leading is in points, the table's "leading"
+  # key is a factor of the size, and the one is written for the other:
+  # "-leading 1.3" at 10 points was taken and set the lines of a paragraph
+  # 1.3 points apart, every line printed over the one before, measured, with
+  # nothing said. The line is drawn at half the size, as a ratio rather than
+  # at a number of points, which would refuse a 2 pt font on a 2.4 pt
+  # leading. Asked here, where the size and the leading meet, and not in
+  # [font]: the size may still change after the leading is set.
+  #
+  # A PARAGRAPH OF ONE LINE IS LEFT ALONE, because there the leading moves
+  # nothing - and it is not academic: a table draws each line of a cell of
+  # runs as a [text -width] of its own, with the font state's leading and
+  # the cell's size, so a document whose state says "-size 6 -leading 7"
+  # had every 16 pt cell of runs refused, measured, until the lines were
+  # counted. They are counted only where the leading is already under half
+  # the size, so a paragraph set as it should be is broken once, as before.
+  # [textLines] and [textHeight] do not ask: they draw nothing, and the
+  # paragraph drawn with the same options is refused here.
+  method TextLeading {state string arguments} {
+    set leading [dict get $state leading]
+    set size [dict get $state size]
+    if {$leading >= $size / 2.0} {
+      return
+    }
+    # The options of [text] less the two of a fitted line, which [textLines]
+    # does not take; -fit itself never reaches here, beside -width it is
+    # refused, and a -shrinkLimit without it is read by nothing.
+    set measure {}
+    foreach {name value} $arguments {
+      if {[string trimleft $name -] ni {fit shrinkLimit}} {
+        lappend measure $name $value
+      }
+    }
+    if {[llength [my textLines $string {*}$measure]] < 2} {
+      return
+    }
+    return -code error -errorcode [list TCLPDF TEXT LEADING $leading $size] \
+        "tclpdf: -leading is a line spacing in points, and $leading at a\
+        size of $size would set the lines of a paragraph over each other -\
+        a leading of at least half the size is taken; for $leading times\
+        the size write -leading [format %g [expr {$leading * $size}]]"
   }
 
   # The two meanings a y coordinate can have, and nothing else: the manual

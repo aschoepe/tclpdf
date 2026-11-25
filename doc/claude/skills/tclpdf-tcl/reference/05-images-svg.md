@@ -223,7 +223,7 @@ The two need not be the same size - every image is defined on the unit square, s
 set box [$doc svg $svgFile -at {20 110} -width 50 -alt "A sample drawing"]
 puts "drawn: $box"
 puts "natural size: [$doc svg size $svgFile]"
-puts "skipped elements of the LAST drawing: [$doc svg info]"
+puts "skipped elements of the LAST drawing: [$doc svg info]"   ;# ask after each svg call
 
 # -data: markup from a variable - what a generator wants, no temporary file.
 set colour "#2f6fb0"

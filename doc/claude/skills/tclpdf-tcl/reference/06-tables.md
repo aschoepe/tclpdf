@@ -10,6 +10,8 @@ $doc font embed body $ttf
 $doc font embed bodyBold $ttfBold
 
 # A row is a list of cells; a cell is a string or a dictionary. Returns the y below.
+# A string whose FIRST word is a cell key (text, align, style ...) and whose
+# word count is even IS read as a dictionary - write it {text "align left"}.
 set y [$doc table -at {20 20} -width 170 -theme striped \
     -head {{Item Qty "Unit price" Total}} \
     -body {
@@ -48,7 +50,7 @@ Rows tied by a `rowSpan` never split across a page. Unknown keys and out-of-rang
 
 ## Styles and themes
 
-Style keys, read at every level - `-style`, `-headStyle`/`-bodyStyle`/`-footStyle`, a column, a cell's `style` - the most specific wins: `family fontStyle size leading padding fill color align valign direction hyphenate markup border lineColor lineWidth`. A theme (`plain`, `striped`, `grid`) is a set of these.
+Style keys, read at every level - `-style`, `-headStyle`/`-bodyStyle`/`-footStyle`, a column, a cell's `style` - the most specific wins: `family fontStyle size leading padding fill color align valign direction hyphenate markup border lineColor lineWidth`. `leading` here is a **factor** of `size` (default `1.15`), where `font -leading` takes points. A theme (`plain`, `striped`, `grid`) is a set of these.
 
 ```tcl
 set y [$doc table -at [list 20 [expr {$y + 8}]] -width 80 -theme plain \
@@ -194,6 +196,40 @@ if {[catch {$doc table -at {20 300} -width 60 -theme plain \
 } else {
     puts "NOT REFUSED: a heading in a cell went through, which it should not have"
 }
+
+# The words of such a heading can stay, as a bold line at the cell's size:
+# translate the text in -didParseCell, turn every "heading" in the pairs
+# into "style bold", and hand the pairs back as runs - text emptied, markup
+# taken off the cell (runs beside a markup on the cell are refused).
+package require tclpdf::markdown
+proc headingAsBold {cell doc} {
+    # Not caught: a notation left open is refused here as the table would.
+    if {[dict get $cell section] ne "body"} {
+        return $cell
+    }
+    set pairs [::tclpdf::markdown::parse [dict get $cell text]]
+    set runs {}
+    set found 0
+    foreach {piece options} $pairs {
+        if {[dict exists $options heading]} {
+            dict unset options heading
+            dict set options style bold
+            set found 1
+        }
+        lappend runs $piece $options
+    }
+    if {$found} {
+        dict set cell runs $runs
+        dict set cell text {}
+        dict unset cell markup
+    }
+    return $cell
+}
+set y [$doc table -at [list 20 [expr {$y + 8}]] -width 170 -theme grid \
+    -body {{1 "## Service visit\nmonthly, **on site**"}} \
+    -columns {{width 14} {markup markdown}} \
+    -style {family report size 9} -didParseCell headingAsBold]
+puts "a heading set as a bold line: the table ends at y = [format %.1f $y]"
 ```
 
 ```tcl
