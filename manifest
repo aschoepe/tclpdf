@@ -1,5 +1,5 @@
-C Set\sthe\smode\sof\severy\sinstalled\sfile\sand\sdirectory\n\n-\sinstall.tcl:\safter\seach\scopy\sand\smkdir\sthe\sentry\sgets\su=rw,go=r\sor\su=rwx,go=rx,\sso\sa\ssource\schecked\sout\sas\s0600\sno\slonger\sinstalls\sunreadable\n-\stests:\srelease-3.2\sinstalls\sover\s0600\ssources\sinto\sa\sscratch\sdirectory
-D 2026-11-25T10:16:47.729
+C Note\sin\sthe\ssvg\shead\sthat\sa\sstyle\sblock\sunder\sdefs\sis\scounted\stoo\n\n-\ssvg:\sthe\shead\scomment\snames\sthe\sdefs\scase\sand\sSvgStyleBlock\n-\ssvg\s1.14
+D 2026-11-25T10:18:19.365
 F Makefile.in 0cd9a281fb6eed3403962cd07330196db2d1a5b8403ca33a721fd89c397c2b0b
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -365,7 +365,7 @@ F pattern.tcl ff3122343995d0403d5227c27f2f6533a3aae71e4a3a4b36cd73624efd3643d9
 F pdfFunction.tcl db7bc175846afc7d36aa2663151c5d66e0fe8ccc01d6e966064e33917414d70d
 F pdfObj.tcl 043bc27cab0378c863bafe382cbb81dbbc4c979ea7a5575b0c7321e679f5c124
 F pdfa.tcl 9017916033a88a1edceacbabf21ab9c95d1493459014c2961d8cf844e76770e1
-F pkgIndex.tcl.in d310a3ebd4fe610f8e6c3bf9fe16c85f875e29fc3c243cf4025e7c44141e2367
+F pkgIndex.tcl.in a84679ee93b650f484cd0254aeabd1d19d46930816a6d2c5df172840e44b12d7
 F sbix.tcl 79af5fd7e5d26953f740b2477893c42cc8beb98ebc5b9aa71396f69fb835480c
 F sfnt.tcl db90e51ff1f67ea6a0f1fdfce2516ed338488963f7973d9bbcd1e8ad19dee7f8
 F shading.tcl aad03244e4cfd880e55f6e806ad98ef174baadaa0eacc9ac0f024b2c3d8fd22d
@@ -378,7 +378,7 @@ F structureDest.tcl a2f60c1f055f08b60bde22affe5b2a42fe7c48ec6dccb7dc78922138ed88
 F structureReport.tcl 0333df32a94fc5b3f10c4c3690792f7ce6b38c50f25c69a7f4ee410f3c20a073
 F structureWrite.tcl d22f84a93a66372d829ee232d3046dbb193af4dd1d9d95b86e676a642222cb90
 F subset.tcl f16f0f1dd1b6337e2ba306964c30a715ed7623b536c3ca4b11f02e4e44bbb747
-F svg.tcl b53285f2585855529996eab0e5ace2afb7438fd5e636bbf8b5e3a02954d54bba
+F svg.tcl e45e1aca2953fb70bb00f944740732e4a03a68f30dc8ed3809015a6c382b2947
 F svgClip.tcl ebd4c96cc1ed12b3b91e87952398391e84f2a3d5c8acbe6821f641b732091e4f
 F svgElement.tcl 01f2d1634dc4643fec5653781852b17166269e6401d133cec837c1e5afaa8d7e
 F svgPaint.tcl 616fe388b723a3a8ac183da4b849969c60e8c9ac9f202ca97d97ec0180b83c01
@@ -523,8 +523,8 @@ F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
 F xml.tcl 3abe87e2da0b29d2443e9e46a25284923cee6bd19b0b059f23e5da47bb816596
 F xmp.tcl 1fe4b3a7d45f98c270230cdac79d08fef4f3bec3bc9ca32c5032a709ebe092d5
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 610c9f70b2c0bba0782d392675a757ae2b3e5c715d7a1f6028cdde852a2fdc50
-R afb5167eb146950ed70e5527987586d4
+P ec33b25bd3a9a47258c43e52ac789460e9cbddd42123fcef5b9fd6bc58c061ad
+R f8893d79e4c5094f806ed39c1d0dcfcd
 U alex
-Z 1ac1a4a6a6aaa8f0e7e699f64bc04965
+Z 4cafccb6248b52df7ab1462174e540ac
 # Remove this line to create a well-formed Fossil manifest.

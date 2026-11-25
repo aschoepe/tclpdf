@@ -105,7 +105,9 @@
 # that was false is the reason it is spelled out here: a <style> block, a
 # spreadMethod and a gradientTransform went by in silence, because two of
 # them are attributes and the third stood in the list of elements this
-# module has a case for. All three are counted now.
+# module has a case for. All three are counted now - the <style> block since
+# 2026-11-25 also where it stands under <defs>, through [SvgStyleBlock] of
+# svgElement.tcl, which the defs tally had passed over for the same reason.
 #
 # THE ONE THING THAT IS NOT REPORTABLE that way is an attribute, which is
 # why preserveAspectRatio is read although no file on this machine carries
@@ -1280,4 +1282,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::svg 1.13
+package provide tclpdf::svg 1.14
