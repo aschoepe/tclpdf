@@ -34,7 +34,7 @@
 package require Tcl 8.6.11-
 package require TclOO
 package require tclpdf::pdfObj 1.0-
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.5-
 package require tclpdf::filter 1.0-
 package require tclpdf::io 1.0-
 package require tclpdf::document 1.0-
@@ -177,11 +177,7 @@ oo::define ::tclpdf::document::document {
   # rejected.
   method attach {args} {
     # A leading path argument is optional so that both spellings work.
-    set path {}
-    if {[llength $args] % 2} {
-      set path [lindex $args 0]
-      set args [lrange $args 1 end]
-    }
+    lassign [::tclpdf::option leading $args] path args
     set options [::tclpdf::option parse {
       data {} name {} description {} relationship Unspecified
       mime application/octet-stream compress 1 date {}
@@ -196,12 +192,7 @@ oo::define ::tclpdf::document::document {
     # -data is told from its absence by PRESENCE, not by content: an empty
     # attachment - a zero-byte marker file - is a legal thing to embed, and
     # "-data {}" used to be refused as "needs a file name or -data".
-    set given 0
-    foreach {option value} $args {
-      if {[string trimleft $option -] eq "data"} {
-        set given 1
-      }
-    }
+    set given [::tclpdf::option given $args data]
     if {$path ne {}} {
       # Binary, always - see io.tcl for what that prevents.
       set bytes [::tclpdf::io read $path]
@@ -210,17 +201,7 @@ oo::define ::tclpdf::document::document {
       }
     } elseif {$given} {
       set bytes [dict get $options data]
-      # Bytes, as the option says. A character above U+00FF is text that was
-      # never encoded, and the two roads out used to treat it differently:
-      # uncompressed it was refused at the write by the writer's byte check,
-      # compressed it went to [zlib compress], which keeps the low byte of
-      # each character and says nothing - "中" became one byte 0x2D in the
-      # file. Same rule as the writer's, said at the call.
-      if {[regexp {[^\u0000-\u00ff]} $bytes]} {
-        return -code error -errorcode [list TCLPDF ATTACH ARGUMENT data] \
-            "tclpdf: -data takes bytes, not text - encode it\
-            first (encoding convertto utf-8 \$text)"
-      }
+      my CheckBytes $bytes "attach -data"
     } else {
       return -code error -errorcode [list TCLPDF ATTACH ARGUMENT source] \
           "tclpdf: attach needs a file name or -data"
@@ -379,6 +360,29 @@ oo::define ::tclpdf::document::document {
     return [dict get $options name]
   }
 
+  # Bytes, as -data says - the check of [attach -data], kept as a method of
+  # its own because [zugferd -data] has to make the SAME check before it
+  # changes anything (zugferd.tcl, ZugferdInvoice): its call to [attach]
+  # comes after the PDF/A claim and the Factur-X schema, so a refusal there
+  # would leave both standing. "what" is the call as the caller wrote it,
+  # the way [CheckDate] names its callers; the code stays this module's,
+  # which owns the embedded file stream.
+  #
+  # A character above U+00FF is text that was never encoded, and the two
+  # roads out used to treat it differently: uncompressed it was refused at
+  # the write by the writer's byte check, compressed it went to [zlib
+  # compress], which keeps the low byte of each character and says nothing
+  # - "中" became one byte 0x2D in the file. Same rule as the writer's,
+  # said at the call.
+  method CheckBytes {bytes what} {
+    if {[regexp {[^\u0000-\u00ff]} $bytes]} {
+      return -code error -errorcode [list TCLPDF ATTACH ARGUMENT data] \
+          "tclpdf: $what takes bytes, not text - encode it\
+          first (encoding convertto utf-8 \$text)"
+    }
+    return
+  }
+
   method attachments {} {
     return [lmap entry [my state attachments] {dict get $entry name}]
   }
@@ -508,4 +512,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::attach 1.9
+package provide tclpdf::attach 1.10

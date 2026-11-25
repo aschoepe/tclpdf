@@ -71,7 +71,8 @@ namespace eval ::tclpdf::option {
 proc ::tclpdf::option::parse {defaults arguments {context {}}} {
   if {[llength $arguments] % 2} {
     return -code error -errorcode [list TCLPDF OPTION PAIRS $context] \
-        "tclpdf: options come in pairs[Where $context], got \"$arguments\""
+        "tclpdf: options come in pairs[Where $context], got\
+        \"[Shown $arguments]\""
   }
   foreach {option value} $arguments {
     set name [string trimleft $option -]
@@ -93,7 +94,7 @@ proc ::tclpdf::option::parse {defaults arguments {context {}}} {
 proc ::tclpdf::option::partition {defaults arguments} {
   if {[llength $arguments] % 2} {
     return -code error -errorcode {TCLPDF OPTION PAIRS {}} \
-        "tclpdf: options come in pairs, got \"$arguments\""
+        "tclpdf: options come in pairs, got \"[Shown $arguments]\""
   }
   set rest {}
   foreach {option value} $arguments {
@@ -379,4 +380,60 @@ proc ::tclpdf::option::Where {context} {
   return " for $context"
 }
 
-package provide tclpdf::option 1.4
+# The arguments as a refusal quotes them: the first sixty characters and
+# "..." where there are more. The message of an odd count used to carry the
+# whole argument list, and where one of the values is a document - a
+# [zugferd -data] or [attach -data] with an invoice in it - that is the
+# whole invoice in the error message: 12 131 characters measured
+# 2026-11-25 for "zugferd -data $xml -date D:..." made before [zugferd]
+# took -data. The beginning is what tells a caller which call it was; the
+# rest they have in hand.
+#
+# Under Tcl 8.6 a character beyond the BMP is two string elements, and a cut
+# between them would end the quote in half a character - so a high
+# surrogate left alone at the end goes as well. Under Tcl 9 the class never
+# matches.
+proc ::tclpdf::option::Shown {arguments} {
+  if {[string length $arguments] <= 60} {
+    return $arguments
+  }
+  set head [string range $arguments 0 59]
+  regsub {[\uD800-\uDBFF]$} $head {} head
+  return "$head..."
+}
+
+# Whether an option was GIVEN at all, as opposed to left at its default - a
+# question the dictionary [parse] returns cannot answer where every value,
+# the empty one included, is legal: "-data {}" is an empty attachment, not a
+# missing one. Read over the same -name value pairs, with or without the
+# dash, the way [parse] reads them; the arguments are expected to have been
+# through [parse] first, which is what refuses an odd count.
+#
+#   if {[::tclpdf::option given $args data]} {...}
+#
+# Its companion is [leading] below; the two together are how a command that
+# takes "?path? ?-data bytes?" reads its call.
+proc ::tclpdf::option::given {arguments name} {
+  foreach {option value} $arguments {
+    if {[string trimleft $option -] eq $name} {
+      return 1
+    }
+  }
+  return 0
+}
+
+# An optional leading word in front of -name value pairs - the file name of
+# "$doc attach ?path? -name x", which may also be given as -data instead.
+# An odd count means the first word is it; an even count means there is
+# none. Returns a two-element list, the word (empty where there is none)
+# and the pairs:
+#
+#   lassign [::tclpdf::option leading $args] path args
+proc ::tclpdf::option::leading {arguments} {
+  if {[llength $arguments] % 2} {
+    return [list [lindex $arguments 0] [lrange $arguments 1 end]]
+  }
+  return [list {} $arguments]
+}
+
+package provide tclpdf::option 1.5

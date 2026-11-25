@@ -1880,6 +1880,160 @@ test zugferd-19.1 {a caller's packet without the fx description refuses the writ
   set out
 } -result {1 {TCLPDF XMP CALLER} 1 0 factur-x.xml 1 {TCLPDF XMP CALLER} 1 0 factur-x.xml}
 
+# --- the invoice as bytes: -data and -date --------------------------------
+#
+# Until 2026-11-25 [zugferd] took the XML as a file only, while [attach],
+# [font embed], [image embed] and [svg] all take -data. A caller who builds
+# the XML in memory had to write a temporary file - and the file's
+# modification time became /Params /ModDate, so every run wrote another
+# date and the document could not be made twice the same. -data takes the
+# bytes; -date, required with it, takes the time, and wins over the file's
+# in the path form as it does for [attach].
+
+set zugferdMoment "D:20260812093000+02'00'"
+
+# The /Params /ModDate of the one attachment in BYTES, or "none".
+proc paramsDate {bytes} {
+  if {![regexp {/Params << [^>]*?/ModDate \(([^)]*)\)} $bytes -> written]} {
+    return none
+  }
+  return $written
+}
+
+test zugferd-20.1 {-data without -date is refused before anything is declared} -constraints {haveInvoice haveTdom} -body {
+  set doc [archivable $face]
+  set xml [::tclpdfTest::readBytes $invoice]
+  set code [::tclpdfTest::refusal {$doc zugferd -data $xml}]
+  catch {$doc zugferd -data $xml} err
+  set after [untouched $doc]
+  $doc destroy
+  list $code [string match {*zugferd -data needs -date*14.13.2*} $err] $after
+} -result {{TCLPDF ZUGFERD ARGUMENT date} 1 {{} {} {} {}}}
+
+test zugferd-20.2 {-data with -date: embedded under -name, the date as /ModDate, the profile read as from the file} -constraints {haveInvoice haveTdom} -body {
+  set xml [::tclpdfTest::readBytes $invoice]
+  set doc [archivable $face]
+  set fromFile [list [$doc zugferd $invoice] [$doc zugferd state]]
+  $doc destroy
+  set doc [archivable $face]
+  set fromData [list [$doc zugferd -data $xml -date $zugferdMoment \
+      -name zugferd-invoice.xml] [$doc zugferd state]]
+  set path [::tclpdfTest::scratch zugferd-data.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  # The state differs in the name only - the one option that was given.
+  set state [lindex $fromFile 1]
+  dict set state name zugferd-invoice.xml
+  lset fromFile 1 $state
+  list [lindex $fromData 0] [string equal $fromData $fromFile] \
+      [string equal [paramsDate $bytes] $zugferdMoment] \
+      [regexp {/F \(zugferd-invoice.xml\) /UF \(zugferd-invoice.xml\)} $bytes] \
+      [regexp {<fx:DocumentFileName>zugferd-invoice.xml</fx:DocumentFileName>} $bytes] \
+      [regexp ***=$xml $bytes]
+} -result {{EN 16931} 1 1 1 1 1}
+
+test zugferd-20.3 {the path form takes the file's time, and an explicit -date wins over it} -constraints {haveInvoice haveTdom} -body {
+  # The fixture's mtime is SET, so the expectation does not move with the
+  # machine; its spelling comes from [pdfObj date], because it carries the
+  # local time zone (as in attach-3.7).
+  set source [::tclpdfTest::scratch zugferd-mtime.xml]
+  file copy -force $invoice $source
+  file mtime $source 1755000000
+  set out {}
+  foreach date [list {} $zugferdMoment] {
+    set doc [archivable $face]
+    if {$date eq {}} {
+      $doc zugferd $source
+    } else {
+      $doc zugferd $source -date $date
+    }
+    set path [::tclpdfTest::scratch zugferd-mtime.pdf]
+    $doc write $path
+    $doc destroy
+    lappend out [paramsDate [::tclpdfTest::readBytes $path]]
+    file delete $path
+  }
+  file delete $source
+  list [string equal [lindex $out 0] [::tclpdf::pdfObj date 1755000000 1.7]] \
+      [string equal [lindex $out 1] $zugferdMoment]
+} -result {1 1}
+
+test zugferd-20.4 {a file AND -data, or neither, is refused before anything is declared} -constraints {haveInvoice haveTdom} -body {
+  set xml [::tclpdfTest::readBytes $invoice]
+  set doc [archivable $face]
+  set out {}
+  lappend out [::tclpdfTest::refusal {$doc zugferd $invoice -data $xml \
+      -date $zugferdMoment}] [untouched $doc]
+  catch {$doc zugferd $invoice -data $xml -date $zugferdMoment} err
+  lappend out [string match {*file name or -data, not both*} $err]
+  lappend out [::tclpdfTest::refusal {$doc zugferd -date $zugferdMoment}] \
+      [untouched $doc]
+  catch {$doc zugferd} err
+  lappend out [string match {*zugferd needs a file name or -data} $err]
+  $doc destroy
+  set out
+} -result {{TCLPDF ZUGFERD ARGUMENT source} {{} {} {} {}} 1 {TCLPDF ZUGFERD ARGUMENT source} {{} {} {} {}} 1}
+
+test zugferd-20.5 {a bad -date and -data that is text are refused before the claim, and the retry declares the schema once} -constraints {haveInvoice haveTdom} -body {
+  # The trap of this method: [attach] makes both checks only in its own
+  # body, and [zugferd] calls it AFTER [pdfa] and [pdfa extension]. Without
+  # the checks up front a refusal there left a PDF/A-3B claim with the
+  # Factur-X schema and no invoice (see 12.1).
+  set xml [::tclpdfTest::readBytes $invoice]
+  set text "[format %c 0x4e2d]$xml"
+  set doc [archivable $face]
+  set out {}
+  foreach date [list 20260812 "D:20260812093000+02'00" {}] {
+    lappend out [::tclpdfTest::refusal {$doc zugferd -data $xml -date $date}] \
+        [untouched $doc]
+  }
+  # Both forms take the date check: the path form too.
+  lappend out [::tclpdfTest::refusal {$doc zugferd $invoice -date 20260812}] \
+      [untouched $doc]
+  lappend out [::tclpdfTest::refusal {$doc zugferd -data $text \
+      -date $zugferdMoment}] [untouched $doc]
+  catch {$doc zugferd -data $text -date $zugferdMoment} err
+  lappend out [string match {*zugferd -data takes bytes, not text*} $err]
+  $doc zugferd -data $xml -date $zugferdMoment
+  set path [::tclpdfTest::scratch zugferd-retry-data.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  lappend out [regexp -all {Factur-X PDFA Extension Schema} $bytes] \
+      [regexp -all {<fx:DocumentFileName>} $bytes] \
+      [regexp -all {/AFRelationship} $bytes]
+} -result [list {TCLPDF DOCUMENT DATE {zugferd -date}} {{} {} {} {}} \
+    {TCLPDF DOCUMENT DATE {zugferd -date}} {{} {} {} {}} \
+    {TCLPDF ZUGFERD ARGUMENT date} {{} {} {} {}} \
+    {TCLPDF DOCUMENT DATE {zugferd -date}} {{} {} {} {}} \
+    {TCLPDF ATTACH ARGUMENT data} {{} {} {} {}} 1 1 1 1]
+
+test zugferd-20.6 {the same invoice as -data with -date is the same file twice} -constraints {haveInvoice haveTdom} -body {
+  # What -date is for: with a temporary file the run's own time went in as
+  # /ModDate. Two documents built apart, not one written twice, so that
+  # nothing carried over from the first could hide a difference.
+  set xml [::tclpdfTest::readBytes $invoice]
+  set files {}
+  foreach run {a b} {
+    set doc [archivable $face]
+    $doc info CreationDate "D:20260101000000+01'00'"
+    $doc info ModDate "D:20260101000000+01'00'"
+    [$doc writer] id [string repeat \x01 16]
+    $doc zugferd -data $xml -date $zugferdMoment
+    set path [::tclpdfTest::scratch zugferd-twice-$run.pdf]
+    $doc write $path
+    $doc destroy
+    lappend files [::tclpdfTest::readBytes $path]
+    file delete $path
+    after 1100
+  }
+  list [string equal [lindex $files 0] [lindex $files 1]] \
+      [string equal [paramsDate [lindex $files 0]] $zugferdMoment]
+} -result {1 1}
+
 # After the LAST test that writes one: until 2026-11-24 this loop stood after
 # zugferd-13.x, and zugferd-17.4 wrote another order-x.xml behind it that
 # nothing removed - a stray in whatever directory the suite was started from,

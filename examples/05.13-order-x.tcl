@@ -53,7 +53,8 @@ set assets [file join $here assets]
 
 # The attached order. The file is deliberately NOT called order-x.xml:
 # without -name an order is embedded as order-x.xml - the one name the
-# standard allows - whatever the file on disk is called.
+# standard allows - whatever the file on disk is called, and whether it
+# comes as a file or as -data bytes.
 set order [file join $assets xml order-x-comfort.xml]
 
 # What the XML states. Nothing here is invented. In an order the customer is
@@ -153,7 +154,15 @@ puts "  BT-24 read ahead: [$doc zugferd profile $xml]"
 # family changes: the document becomes an ORDER, the attachment is named
 # order-x.xml, and /AFRelationship is /Data - the Order-X default, where a
 # full-profile invoice gets /Alternative.
-set profile [$doc zugferd $order]
+#
+# The order goes in as -data: the bytes just read, which is the form for an
+# XML a program builds in memory - no temporary file. -date is then
+# required, because /Params /ModDate (the time the XML was last changed) is
+# mandatory and bytes have no file time to stand in for it; the throwaway
+# documents below take the file instead and get its modification time. A
+# fixed -date is what keeps this document the same bytes on every run.
+set produced "D:20260818090000+02'00'"
+set profile [$doc zugferd -data $xml -date $produced]
 puts "  profile from BT-24: $profile"
 puts "  attachment: [dict get [$doc zugferd state] name],\
     [dict get [$doc zugferd state] bytes] bytes,\

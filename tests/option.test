@@ -274,4 +274,58 @@ test option-4.8 {the figure stands in one place} -body {
       [::tclpdf::pdfObj fits abc] [::tclpdf::pdfObj fits 0]
 } -result {1 0 0 0 0 0 0 1}
 
+#
+# --- what a refusal quotes, and the two readers of ?path? ?-data? -----------
+#
+# The message of an odd count used to quote the whole argument list, and
+# where one value is a document - [zugferd -data] with an invoice in it -
+# the message was the invoice: 12 131 characters measured on 2026-11-25.
+#
+
+test option-5.1 {an odd count quotes the first sixty characters of a long call} -body {
+  set long "-data [string repeat x 200] -date"
+  set out {}
+  foreach script {
+    {::tclpdf::option parse {data {} date {}} $long zugferd}
+    {::tclpdf::option partition {data {} date {}} $long}
+  } {
+    catch $script message
+    lappend out [string length $message] \
+        [string equal [string range $message end-64 end] \
+            "\"-data [string repeat x 54]...\""]
+  }
+  set out
+} -result {112 1 100 1}
+
+test option-5.2 {a short call is quoted whole, without the dots} -body {
+  catch {::tclpdf::option parse {width 1} {-width} text} message
+  set message
+} -result {tclpdf: options come in pairs for text, got "-width"}
+
+test option-5.3 {a cut never ends in half a character} -body {
+  # Under Tcl 8.6 a character beyond the BMP is two string elements; the
+  # cut at sixty must not keep the first of them alone. Under Tcl 9 the
+  # character is one element and is kept whole or not at all.
+  set emoji [encoding convertfrom utf-8 [binary format H* f09f9880]]
+  set long "[string repeat a 59]$emoji[string repeat b 20]"
+  catch {::tclpdf::option parse {width 1} [list $long]} message
+  regexp {got "(.*)\.\.\."$} $message -> quoted
+  list [string match "[string repeat a 59]*" $quoted] \
+      [regexp {[\uD800-\uDBFF]$} $quoted]
+} -result {1 0}
+
+test option-5.4 {given tells an option given empty from one not given} -body {
+  list [::tclpdf::option given {-data {} -name x} data] \
+      [::tclpdf::option given {data abc} data] \
+      [::tclpdf::option given {-name data} data] \
+      [::tclpdf::option given {} data]
+} -result {1 1 0 0}
+
+test option-5.5 {leading splits an optional first word off the pairs} -body {
+  list [::tclpdf::option leading {file.xml -name x}] \
+      [::tclpdf::option leading {-name x}] \
+      [::tclpdf::option leading {file.xml}] \
+      [::tclpdf::option leading {}]
+} -result {{file.xml {-name x}} {{} {-name x}} {file.xml {}} {{} {}}}
+
 cleanupTests

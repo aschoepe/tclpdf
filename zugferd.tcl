@@ -55,9 +55,9 @@
 
 package require Tcl 8.6.11-
 package require TclOO
-package require tclpdf::option 1.0-
+package require tclpdf::option 1.5-
 package require tclpdf::io 1.0-
-package require tclpdf::attach 1.0-
+package require tclpdf::attach 1.10-
 package require tclpdf::pdfa 1.0-
 package require tclpdf::document 1.0-
 
@@ -183,6 +183,8 @@ oo::define ::tclpdf::document::document {
 
   # $doc zugferd <path> ?-name factur-x.xml? ?-profile ...? ?-type INVOICE?
   #              ?-version 1.0? ?-icc icc/sRGB.icc? ?-relationship r? ?-description d? ?-compress 0?
+  #              ?-date D:20260818120000+02'00'?
+  # $doc zugferd -data <xmlBytes> -date D:... ?...?   (no file on disk)
   # $doc zugferd profile <xmlBytes>    -> the conformance level, without writing
   # $doc zugferd state
   method zugferd {args} {
@@ -195,10 +197,13 @@ oo::define ::tclpdf::document::document {
     return [my ZugferdInvoice {*}$args]
   }
 
-  method ZugferdInvoice {path args} {
+  method ZugferdInvoice {args} {
+    # A leading path argument is optional, as for [attach]: the XML is a
+    # file or it is -data, bytes built in memory.
+    lassign [::tclpdf::option leading $args] path args
     set options [::tclpdf::option parse {
       name {} profile {} type {} version 1.0 icc {} compress 0
-      relationship {} description {}
+      relationship {} description {} data {} date {}
     } $args "zugferd"]
     if {[my state zugferd] ne {}} {
       return -code error -errorcode [list TCLPDF ZUGFERD STATE invoice] \
@@ -223,10 +228,68 @@ oo::define ::tclpdf::document::document {
     # fx:DocumentFileName in the packet and NO invoice in the file - a
     # document that validates and lies - and a corrected retry declared the
     # schema a second time.
+    #
+    # The same holds for the XML itself and its date. [attach] checks -data
+    # for bytes and -date for a PDF date only in its own body, which comes
+    # last here - so both are asked here first, through the very checks
+    # [attach] makes ([CheckBytes] in attach.tcl, [CheckDate] in
+    # document.tcl), and [attach] then finds nothing left to refuse.
+    #
+    # The XML is a file or -data, one of the two and never both, as for
+    # [attach], [font embed] and [image embed]: a caller who wrote both
+    # meant one of them, and which one is a question only they can answer.
+    # -data is told from its absence by presence, as in [attach]; an empty
+    # one is then refused below for having no BT-24, like an empty file.
+    set given [::tclpdf::option given $args data]
+    if {$path ne {} && $given} {
+      return -code error -errorcode [list TCLPDF ZUGFERD ARGUMENT source] \
+          "tclpdf: zugferd takes a file name or -data, not both - the\
+          file would be embedded and the bytes dropped; name one of the two"
+    }
+    if {$path eq {} && !$given} {
+      return -code error -errorcode [list TCLPDF ZUGFERD ARGUMENT source] \
+          "tclpdf: zugferd needs a file name or -data"
+    }
+    # /Params /ModDate of the embedded XML is required (Factur-X 1.09.2,
+    # embedding rules; Order-X 1.0, 4.1.1; ISO 32000-2, 14.13.2 for every
+    # associated file), and it is the modification time OF THE XML - not the
+    # current time, which would give the same invoice different bytes on
+    # every run. The rule is the one [attach] keeps, for the same reasons:
+    #
+    #   - the PATH form has the file, so its modification time is the
+    #     default;
+    #   - -data has no file behind it, and stamping [clock seconds] in, or
+    #     guessing from a date inside the XML (an issue date is not when the
+    #     file was last changed), would break the rule the package writes by
+    #     - the same document written twice gives the same bytes - so the
+    #     caller has to say, and is refused rather than guessed for;
+    #   - an explicit -date always wins, in both forms.
+    set date [dict get $options date]
+    if {$date ne {}} {
+      my CheckDate $date "zugferd -date"
+    } elseif {$given} {
+      return -code error -errorcode [list TCLPDF ZUGFERD ARGUMENT date] \
+          "tclpdf: zugferd -data needs -date, the modification time of the\
+          XML it carries - /Params /ModDate of the embedded invoice is\
+          required (Factur-X 1.09.2, Order-X 1.0, 4.1.1; ISO 32000-2,\
+          14.13.2) and -data has no file whose time could stand in for it -\
+          pdfObj date writes one from a clock value\
+          (D:20260818120000+02'00')"
+    }
 
     # Read as bytes and keep them that way. Everything downstream - the
     # attachment, the checksum a recipient may compute - depends on it.
-    set bytes [::tclpdf::io read $path]
+    # Read ONCE: what is identified below is what is embedded, and the
+    # file is not opened a second time by [attach].
+    if {$given} {
+      set bytes [dict get $options data]
+      my CheckBytes $bytes "zugferd -data"
+    } else {
+      set bytes [::tclpdf::io read $path]
+      if {$date eq {}} {
+        set date [::tclpdf::pdfObj date [file mtime $path]]
+      }
+    }
 
     # The document type decides the family - invoice or order - and the
     # family decides which levels, which names and which relationships are
@@ -455,15 +518,12 @@ oo::define ::tclpdf::document::document {
     if {$description eq {}} {
       set description "$profile $kind data"
     }
-    # ModDate in the /Params dictionary is required for the attachment (Factur-X
-    # 1.09.2, embedding rules; Order-X 1.0, 4.1.1). The MODIFICATION TIME OF
-    # THE XML FILE is used rather than the current time: it is what the field
-    # means, and it keeps the output reproducible - the same invoice written
-    # twice has to give the same bytes.
-    my attach $path -name $name -relationship $relationship \
+    # The bytes read above, as -data in both forms, and the date settled
+    # above - the file's modification time or the caller's -date. See the
+    # checks at the top for why it is never the current time.
+    my attach -data $bytes -name $name -relationship $relationship \
         -mime text/xml -compress [dict get $options compress] \
-        -description $description \
-        -date [::tclpdf::pdfObj date [file mtime $path]]
+        -description $description -date $date
 
     my state zugferd [dict create name $name profile $profile \
         type $type version $version \
@@ -623,4 +683,4 @@ proc ::tclpdf::zugferd::properties {name type version conformance {family invoic
   return $xml
 }
 
-package provide tclpdf::zugferd 1.6
+package provide tclpdf::zugferd 1.7
