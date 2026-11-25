@@ -1,5 +1,5 @@
-C Count\sthe\stag\snames\sof\s-markup\stags\sas\sfourteen\n\n-\smanual:\sthe\slist\sof\stag\snames\sincludes\sul,\sol\sand\sli,\sand\sthe\scount\ssays\sso
-D 2026-11-25T16:02:24.021
+C Skill:\sa\spath\sbeside\s-data\sis\srefused,\sa\slong\soption\sword\sis\squoted\sin\sshort\n\n-\sSKILL.md:\sattach\sand\szugferd\stake\sone\ssource;\sthe\smessage\sof\san\soption\srefusal\squotes\sa\slong\sword\sin\sshort\swhile\sthe\s-errorcode\scarries\sit\swhole
+D 2026-11-25T20:35:56.941
 F Makefile.in 0cd9a281fb6eed3403962cd07330196db2d1a5b8403ca33a721fd89c397c2b0b
 F README eb25feef54ba51cc238cdad1d5e209d3f604600ba9169b8d1f5ce9a9c6092ace
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -25,7 +25,7 @@ F crypto.tcl 851746f7541be0efb73f7d4da5cd63ca0e2ca7b3d00a9ef4f054af52cba572d2
 F doc/PLUGINS.md 9edd909da3d38b16be7df69092f605794f7024e0bc8b23c6881bda77cc49413e
 F doc/TCLPDF-VS-PDF4TCL.md 6c339a524e8f47f0473a9541a6e54181508f7beb0bdd2cced87f534d3224f025
 F doc/claude/TCLPDF.md a7a08051298d1d8de1b7f0d4d53b73af79a2e9f6c721798e001f4265f09da464
-F doc/claude/skills/tclpdf-tcl/SKILL.md 6cfa76ab0c0e3cf327e1107c6af54a6bc4816d1a29e7d44600c3e42d29ba377b
+F doc/claude/skills/tclpdf-tcl/SKILL.md 6f74b5f3f9a7871fe3f2347ec22e694a24776ad14d84094edd19b3e6a34a390d
 F doc/claude/skills/tclpdf-tcl/assets.tcl 4bcc5e716bbb03489d086b94b1bc8d9d5360975c212a53e7a66bb5870c0f53ae
 F doc/claude/skills/tclpdf-tcl/check.tcl a97c8006f0c8f15de829cbe4329b12a8149f2ca78606bb0c683c5a795e439d04
 F doc/claude/skills/tclpdf-tcl/reference/01-document.md 70be90debb430ec2ba5982a8924d11909277ba3e4be6db53e34fd77db024b52d
@@ -529,8 +529,8 @@ F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
 F xml.tcl 3abe87e2da0b29d2443e9e46a25284923cee6bd19b0b059f23e5da47bb816596
 F xmp.tcl 1fe4b3a7d45f98c270230cdac79d08fef4f3bec3bc9ca32c5032a709ebe092d5
 F zugferd.tcl 9bab8b7d198a5dfdf6ded1d03b81fef9410f347ffc05bc763687990b440658fe
-P 6fddf51a77bd1bf4d4e9ae38fec9c9077b09b977397e6e6acaef4ad59405e162
-R 03dfed360f1464f1882004b7e89fe392
+P bfb57810f6c87b0d44476875c73e29749876e2f1fc5556871f894368afa1fe81
+R 2d13db964c906023576fed9192f67767
 U alex
-Z 1eb429dd92ddc6917e8a90250779a57a
+Z 22be5e815f763f3dbd6fbdc1e4637236
 # Remove this line to create a well-formed Fossil manifest.
