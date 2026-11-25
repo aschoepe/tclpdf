@@ -1,5 +1,5 @@
-C Report\sa\sstyle\sblock\sunder\sdefs\sas\san\somission\n\n-\ssvgElement:\sa\sstyle\sblock\swith\scontent\sis\scounted\sas\sstyle\swherever\sit\sstands,\sthrough\sone\smethod\sSvgStyleBlock\sused\sby\sthe\selement\sswitch\sand\sby\sthe\sdefs\stally\n-\stests:\ssvg-defs-20.6\sto\s20.9\n-\ssvgElement\s1.9
-D 2026-11-25T10:09:25.911
+C Set\sthe\smode\sof\severy\sinstalled\sfile\sand\sdirectory\n\n-\sinstall.tcl:\safter\seach\scopy\sand\smkdir\sthe\sentry\sgets\su=rw,go=r\sor\su=rwx,go=rx,\sso\sa\ssource\schecked\sout\sas\s0600\sno\slonger\sinstalls\sunreadable\n-\stests:\srelease-3.2\sinstalls\sover\s0600\ssources\sinto\sa\sscratch\sdirectory
+D 2026-11-25T10:16:47.729
 F Makefile.in 0cd9a281fb6eed3403962cd07330196db2d1a5b8403ca33a721fd89c397c2b0b
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -460,7 +460,7 @@ F tests/pdfFunction.test 29ea29b867a39fea22df9d18deca2c3da83190520a66b7a2218fa5a
 F tests/pdfObj.test 0360937b0f24edb8216827034b08bea6f44ff09fe21cdc4ba4c4816bb5466ca7
 F tests/pdfVersion.test d847ac27cae706ec2b69cff93223ff55f1210c9bccffe09e01644ddcf1755d30
 F tests/pdfa.test f1b8c2cf2bd636c4f958194acdb4bab3287d0a35a1e8e412caa4771bc3597f7e
-F tests/release.test 0d3d8c2bef469514c741a0a14a8b61c36427c98a0d494d5c43d6fb425242afd0
+F tests/release.test bb0aa88f7bbe75db5acb3f0e86e6cc900e1aba422bf43b5dabdfe7d89ae8f085
 F tests/sbix.test d73f19cbeb3dd4a0eb8831d57c9fe5b25b63be8d1c29a7447dca20c4bfe148aa
 F tests/sfnt.test bf237f7cf70122ccde5f05af1148c949437c113c1805b2cdeca18feaac91c9a4
 F tests/shading.test fd1d3f1aa75c48be10b46499f3e706487e7d580d15577530d7269a70be86c5de
@@ -500,7 +500,7 @@ F tools/archive.sh 6f92dbf6c429b15f2ed339a856adcd90e2db3fa09a576b1475190c9dd717c
 F tools/check.sh bce5930474f295016a06129bd9c3f3f9b342890b381a266047bc452421615d0a x
 F tools/coverage.tcl 6e96cec6297b948ab2b8328f4a113a57ab26795f99b72cb4f57725ff14f9a084
 F tools/formcheck.java 6fcfc8b9b37f786b65123d3fc54a12ef7d23448c5bc0e3f93119c1e61def6f07
-F tools/install.tcl f04305eb268bf32fe1221890cf57a48728981adc5e78b38eaa78a37b8f88076c
+F tools/install.tcl dbc5fd497f18532f303312750a077e23e38159956958d4ce9f960ed8e645c722
 F tools/mkafm.tcl f1299c5940936c0a86e1020966c5bb35a3aeb4d65dd1f34d329599676a4adb94
 F tools/mkbidi.tcl a63330c109358604487540fbafb8964667274819294c6d779668a5941e86dfb0
 F tools/mkerrorcodes.tcl 67babbeb88cb80dd4a5f1e70d20ecd96299d0c5e0527d2ae741769c78a33cc96
@@ -523,8 +523,8 @@ F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
 F xml.tcl 3abe87e2da0b29d2443e9e46a25284923cee6bd19b0b059f23e5da47bb816596
 F xmp.tcl 1fe4b3a7d45f98c270230cdac79d08fef4f3bec3bc9ca32c5032a709ebe092d5
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 9def33ad9609fc0ec14a80f6b78cd623e6da17bd557c6cd6c65ed5cb3ad1dd32
-R fb6d48fb55cc5e03126b25919e6a4d37
+P 610c9f70b2c0bba0782d392675a757ae2b3e5c715d7a1f6028cdde852a2fdc50
+R afb5167eb146950ed70e5527987586d4
 U alex
-Z e265b70a36d969f735187d1e75ce0c5b
+Z 1ac1a4a6a6aaa8f0e7e699f64bc04965
 # Remove this line to create a well-formed Fossil manifest.

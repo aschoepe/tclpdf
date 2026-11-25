@@ -34,9 +34,13 @@
 #                a version bump reruns "config.status --recheck", which never
 #                rewrites the index, and install did not depend on it - the
 #                new directory then announced the old versions and "package
-#                require tclpdf" failed.
+#                require tclpdf" failed. And every file it puts down has to
+#                be readable by everyone, every directory searchable: until
+#                1.7.3 "file copy" carried the mode of the source over, and a
+#                module that was 0600 in the checkout arrived as 0600 - a
+#                web server running as another user could not load it.
 #
-# That one needs a configured tree (config.status) and make, not fossil.
+# Those need a configured tree (config.status) and make, not fossil.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
@@ -444,6 +448,61 @@ test release-3.1 {make install over a stale pkgIndex.tcl installs the index of t
 } -cleanup {
   file delete -force $dir
   unset -nocomplain dir before after expected index installed announced wanted problems
+} -result {}
+
+# Every file and directory below an installed package whose mode is not the
+# one wanted, each as "<path> <mode>". The mode is compared as TEXT, by its
+# last three digits: "file attributes -permissions" answers 00644 under Tcl
+# 8.6 and 0o644 under 9.0, a directory 040755 or 0o40755 - read as a number,
+# the same digits would not mean the same on both.
+proc ::releaseTest::wrongModes {dir {prefix {}}} {
+  set wrong {}
+  foreach entry [lsort [glob -nocomplain -directory $dir *]] {
+    set name $prefix[file tail $entry]
+    set mode [string range [file attributes $entry -permissions] end-2 end]
+    if {[file isdirectory $entry]} {
+      if {$mode ne "755"} {
+        lappend wrong "$name/ $mode"
+      }
+      lappend wrong {*}[wrongModes $entry $name/]
+    } elseif {$mode ne "644"} {
+      lappend wrong "$name $mode"
+    }
+  }
+  return $wrong
+}
+
+test release-3.2 {make install from a tree with private files installs everything readable for everyone} -constraints {configuredTree unix} -setup {
+  set dir [::tclpdfTest::scratch release-modes-[pid]]
+  file delete -force $dir
+} -body {
+  ::releaseTest::staleBuild $dir
+  # The private modes go on the COPY: a module, license.terms, a file in
+  # icc/ and icc/ itself - the two ways into install.tcl, a file argument
+  # and a directory argument.
+  set configure [encoding convertfrom utf-8 \
+      [::releaseTest::readBytes [file join $::releaseTest::root configure.ac]]]
+  foreach file [list [lindex [::releaseTest::sources $configure] 0] license.terms \
+      [file join icc sRGB.icc]] {
+    file attributes [file join $dir $file] -permissions u=rw,go=
+  }
+  file attributes [file join $dir icc] -permissions u=rwx,go=
+  exec make -C $dir install DESTDIR=[file join $dir dest] \
+      -o doc/tclpdf.html -o doc/tclpdf.n -o manifest.txt
+  set index [::releaseTest::indexes [file join $dir dest]]
+  if {[llength $index] != 1} {
+    return "[llength $index] installed indexes"
+  }
+  set package [file dirname [lindex $index 0]]
+  set wrong [::releaseTest::wrongModes $package]
+  set mode [string range [file attributes $package -permissions] end-2 end]
+  if {$mode ne "755"} {
+    set wrong [linsert $wrong 0 "[file tail $package]/ $mode"]
+  }
+  join $wrong \n
+} -cleanup {
+  file delete -force $dir
+  unset -nocomplain dir configure file index package wrong mode
 } -result {}
 
 # The two installations go with the file, whichever of its tests ran and
