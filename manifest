@@ -1,5 +1,5 @@
-C Note\sin\sthe\ssvg\shead\sthat\sa\sstyle\sblock\sunder\sdefs\sis\scounted\stoo\n\n-\ssvg:\sthe\shead\scomment\snames\sthe\sdefs\scase\sand\sSvgStyleBlock\n-\ssvg\s1.14
-D 2026-11-25T10:18:19.365
+C Bring\sthe\sClaude\sskill\sup\sto\s1.7.3\n\n-\sSKILL.md:\snumbers\swith\sa\sleading\szero\sand\stexts\sof\sdigits\n-\sreference/05:\sstop-color\sthrough\sthe\sfill\sreader,\sexponents\sin\scoordinates,\sa\sstyle\sblock\sunder\sdefs,\sthe\sXML\scodes\sof\ssvg\sand\ssvg\ssize\sfor\sboth\sparsers\n-\sreference/08:\sthe\sentity\scheck\son\sthe\spacket\sset\swith\smetadata
+D 2026-11-25T10:21:28.229
 F Makefile.in 0cd9a281fb6eed3403962cd07330196db2d1a5b8403ca33a721fd89c397c2b0b
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -25,17 +25,17 @@ F crypto.tcl 851746f7541be0efb73f7d4da5cd63ca0e2ca7b3d00a9ef4f054af52cba572d2
 F doc/PLUGINS.md 631ccfc36c86d130a5568b59b26ef22833b39988b97e3a1405151924f98a018d
 F doc/TCLPDF-VS-PDF4TCL.md 6c339a524e8f47f0473a9541a6e54181508f7beb0bdd2cced87f534d3224f025
 F doc/claude/TCLPDF.md a7a08051298d1d8de1b7f0d4d53b73af79a2e9f6c721798e001f4265f09da464
-F doc/claude/skills/tclpdf-tcl/SKILL.md a06225089c1e01b1c02f34b783b6f5e39c6d945ae1ca69ca5fc7d3f3a7ed38df
+F doc/claude/skills/tclpdf-tcl/SKILL.md 004f1db024a975e4461c0a7dce4ab36238b79d03b0d800d970c28ade738457e5
 F doc/claude/skills/tclpdf-tcl/assets.tcl 4bcc5e716bbb03489d086b94b1bc8d9d5360975c212a53e7a66bb5870c0f53ae
 F doc/claude/skills/tclpdf-tcl/check.tcl a97c8006f0c8f15de829cbe4329b12a8149f2ca78606bb0c683c5a795e439d04
 F doc/claude/skills/tclpdf-tcl/reference/01-document.md 70be90debb430ec2ba5982a8924d11909277ba3e4be6db53e34fd77db024b52d
 F doc/claude/skills/tclpdf-tcl/reference/02-fonts.md ef972a656b642738a2756e304da28a42ab4a2b3d4182cc741860c9ee14b83728
 F doc/claude/skills/tclpdf-tcl/reference/03-text.md 7565fd2d4f973166ba65533006fd07ed9ab6559bde428f9066945910d673ce2f
 F doc/claude/skills/tclpdf-tcl/reference/04-graphics.md ccededa506a6083a24d8f20805c4f274d0c79e20e6e74c3c43d27b39d87852c8
-F doc/claude/skills/tclpdf-tcl/reference/05-images-svg.md 4f25af4acaaef95cd30791aaebd0d793f3b9afeb671d0202c4794d26dd4114d0
+F doc/claude/skills/tclpdf-tcl/reference/05-images-svg.md 9ce059120fd7dac06d69274760d7313a77b72ae80e3b41d075acf796f978cadf
 F doc/claude/skills/tclpdf-tcl/reference/06-tables.md e3a6411daecc40e12bf5177d21711db182e4a5224a905a7b055437e022fb685d
 F doc/claude/skills/tclpdf-tcl/reference/07-patterns-forms.md d4d5b9dc042e0b4f2430390e9a80a5d07d25595fbf624374f559873190c01d30
-F doc/claude/skills/tclpdf-tcl/reference/08-navigation-metadata.md 2438d89c37b769afebdfc7bb6c677b8ef7ae3b3d500e8f1809dfbf2dc1f72169
+F doc/claude/skills/tclpdf-tcl/reference/08-navigation-metadata.md 05985a695e2c922d3e3b315f78cd3de9c8f3d92145a670ae24b69b9bc73cc4ab
 F doc/claude/skills/tclpdf-tcl/reference/09-tagged-ua.md 7dc3cfe40086f6bc6971b03ef3645b2cc7326b26c1a427826008f65e233ad0fb
 F doc/claude/skills/tclpdf-tcl/reference/10-pdfa-zugferd.md 6f89ea60debe14e0e025b55c52ea4aed14a37f4592f65fe95edb9c4d2931aa63
 F doc/claude/skills/tclpdf-tcl/reference/11-encryption-signatures.md 7bd44de0356d75bcaa4c8f80d6e6adf543e7ed04c601a3eeb56c637abf306468
@@ -523,8 +523,8 @@ F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
 F xml.tcl 3abe87e2da0b29d2443e9e46a25284923cee6bd19b0b059f23e5da47bb816596
 F xmp.tcl 1fe4b3a7d45f98c270230cdac79d08fef4f3bec3bc9ca32c5032a709ebe092d5
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P ec33b25bd3a9a47258c43e52ac789460e9cbddd42123fcef5b9fd6bc58c061ad
-R f8893d79e4c5094f806ed39c1d0dcfcd
+P c7b790f4757aee527c2fb28792202d0515cac88351f8e18c8a5b9453cc66e4c1
+R dd1c4140944963f74d645d02b0321389
 U alex
-Z 4cafccb6248b52df7ab1462174e540ac
+Z dd44eb3a4f0241816aa68bc12822fdf8
 # Remove this line to create a well-formed Fossil manifest.

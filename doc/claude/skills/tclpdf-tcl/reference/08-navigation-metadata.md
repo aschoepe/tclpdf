@@ -111,7 +111,10 @@ oo::define ::tclpdf::document::document {
 $doc xmpSchema cal urn:example:calibration:1.0# {Laboratory Certificate Instruments Name Serial} refXmp
 
 # Ready-made rdf:Description elements - the rdf prefix is declared, every other
-# namespace the fragment declares itself. Parsed at the write; malformed = fails there.
+# namespace the fragment declares itself. Parsed at the write; malformed = fails there
+# (TCLPDF XMP CALLER packet, with the parser's words). A packet set with [metadata] is
+# checked against entity expansion first, like every XML the package reads
+# (TCLPDF XML ENTITY expansion / cycle / depth), before tdom parses it.
 $doc xmpRaw {<rdf:Description rdf:about="" xmlns:ref="urn:example:ref:1.0#">
   <ref:Note>Appended as given</ref:Note>
 </rdf:Description>}
