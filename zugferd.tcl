@@ -241,15 +241,8 @@ oo::define ::tclpdf::document::document {
     # -data is told from its absence by presence, as in [attach]; an empty
     # one is then refused below for having no BT-24, like an empty file.
     set given [::tclpdf::option given $args data]
-    if {$path ne {} && $given} {
-      return -code error -errorcode [list TCLPDF ZUGFERD ARGUMENT source] \
-          "tclpdf: zugferd takes a file name or -data, not both - the\
-          file would be embedded and the bytes dropped; name one of the two"
-    }
-    if {$path eq {} && !$given} {
-      return -code error -errorcode [list TCLPDF ZUGFERD ARGUMENT source] \
-          "tclpdf: zugferd needs a file name or -data"
-    }
+    ::tclpdf::option oneSource $path $given zugferd \
+        {TCLPDF ZUGFERD ARGUMENT source}
     # /Params /ModDate of the embedded XML is required (Factur-X 1.09.2,
     # embedding rules; Order-X 1.0, 4.1.1; ISO 32000-2, 14.13.2 for every
     # associated file), and it is the modification time OF THE XML - not the

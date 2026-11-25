@@ -2034,6 +2034,23 @@ test zugferd-20.6 {the same invoice as -data with -date is the same file twice} 
       [string equal [paramsDate [lindex $files 0]] $zugferdMoment]
 } -result {1 1}
 
+test zugferd-20.7 {a forgotten value behind -date: the invoice is refused as an option, quoted short, and nothing is declared} -constraints {haveInvoice haveTdom} -body {
+  # Three words, so [option leading] takes -data for the path and the
+  # invoice lands where an option belongs. Measured 2026-11-25, before the
+  # cut: a message of 12 190 characters, the whole invoice. The code keeps
+  # the word whole - it is the contract (option.tcl, [parse]).
+  set xml [::tclpdfTest::readBytes $invoice]
+  set doc [archivable $face]
+  set code [::tclpdfTest::refusal {$doc zugferd -data $xml -date}]
+  catch {$doc zugferd -data $xml -date} err
+  set after [untouched $doc]
+  $doc destroy
+  list [lrange $code 0 2] [string equal [lindex $code 3] $xml] \
+      [lindex $code 4] [expr {[string length $err] < 250}] \
+      [string match {tclpdf: unknown option "<?xml*..." for zugferd - known are:*} \
+          $err] $after
+} -result {{TCLPDF OPTION UNKNOWN} 1 zugferd 1 1 {{} {} {} {}}}
+
 # After the LAST test that writes one: until 2026-11-24 this loop stood after
 # zugferd-13.x, and zugferd-17.4 wrote another order-x.xml behind it that
 # nothing removed - a stray in whatever directory the suite was started from,

@@ -1,5 +1,5 @@
-C Take\sthe\sinvoice\sof\szugferd\sfrom\s-data\sas\swell,\swith\sits\s-date\n\n-\szugferd:\sa\spath\sor\s-data\sbytes,\sthe\stwo\stogether\sor\sneither\srefused\sas\sZUGFERD\sARGUMENT\ssource;\s-date\sis\srequired\swith\s-data\sand\swins\sover\sthe\sfile\stime\swith\sa\spath;\sbytes\sand\sdate\sare\schecked\sbefore\sthe\sPDF/A\sclaim\sis\smade\n-\sattach:\sthe\scheck\sof\s-data\sbytes\sis\sone\smethod,\sCheckBytes,\sused\sby\sattach\sand\szugferd\n-\soption:\sleading\sand\sgiven,\sthe\sshared\sreaders\sfor\sa\sleading\spositional\sand\sa\snamed\soption;\sthe\sPAIRS\srefusal\sshows\sthe\sstart\sof\sthe\sarguments,\sno\slonger\sthe\swhole\slist\n-\stests:\szugferd-20.1\sto\s20.6,\soption-5.1\sto\s5.3\n-\sexample\s05.13\sembeds\sthe\sorder\sfrom\s-data\swith\sa\sfixed\s-date\n-\smanual\sand\sskill:\sthe\s-data\sform\sof\szugferd\n-\szugferd\s1.7,\sattach\s1.10,\soption\s1.5
-D 2026-11-25T10:51:06.844
+C Refuse\sa\spath\sbeside\s-data\sin\sattach,\sand\squote\sa\slong\soption\sword\sin\sshort\n\n-\sattach:\sa\spath\sand\s-data\stogether,\sor\sneither,\sare\srefused\sas\sATTACH\sARGUMENT\ssource\sbefore\sanything\sis\sread;\sthe\scheck\sis\soption\soneSource,\sshared\swith\szugferd\n-\soption:\sthe\sUNKNOWN\srefusal\squotes\sthe\sword\sthrough\sShown,\sthe\s-errorcode\scarries\sit\swhole\n-\stests:\sattach-8.10,\soption-5.6,\soption-5.7,\szugferd-20.7\n-\smanual:\sattach\snames\sthe\sexclusion
+D 2026-11-25T10:58:22.908
 F Makefile.in 0cd9a281fb6eed3403962cd07330196db2d1a5b8403ca33a721fd89c397c2b0b
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -8,7 +8,7 @@ F afmData.tcl f0ad2d303ad7c2326c17bfdba5f8160cb9147ccad3b7f9097d49cc3cf2330685
 F annot.tcl 86c75c9f5dae9a498ca4191dacd28f431d7b145a8f054e89cd9afa352abffee7
 F annotMark.tcl 03a1d3daeecab318612ba271f5f9899d8eb212e7b4792799a27697f34e28e08c
 F annotShape.tcl 8f85e7973b47c86289cfa896fbb5dc5fd90b1cd4eafd3ede6f2d0ad6319623b5
-F attach.tcl e28352f6f4714adcba6875002769033c2e0ed7aea462b067393ce9d9bf02d960
+F attach.tcl 8c26b26327b6441a5f26e336772fbd0610e6b88e0c5997a9773b56fd663a9458
 F bidi.tcl b74b8e1449d7058402cab1aca8edab6b7f4a6d79dd16edecc4a103e84c3bfc3b
 F bidiData.tcl 564ca00281b5cafcfb5850a7cac64daf5bd432e8a0cd9f7c8d91f821f18c7432
 F color.tcl 13bf2d8b130650dc56adf6a25128b79a866119a27f5e4fdaadfebd0989830357
@@ -42,7 +42,7 @@ F doc/claude/skills/tclpdf-tcl/reference/11-encryption-signatures.md 7bd44de0356
 F doc/claude/skills/tclpdf-tcl/reference/12-import-update-info.md 104bdf7b603f2632a1cd17a5fd71717aeb4489ef7bd0e1b3eae5f24796bb72a0
 F doc/claude/skills/tclpdf-tcl/reference/13-form-fields.md d6dd58f4f6d4f250c4875e5bc13593cefa9625bc5d0f0773f70fbe5c79d34686
 F doc/tclpdf-default.html b543496816ce1ebbc250ce38eb1672a0a58cee20f635b1bd0d739a651a4cbe55
-F doc/tclpdf.md f12f185cad79fb8e8fe81298225241239eb50fd0ada7d20cc9bbe63259aff4ea
+F doc/tclpdf.md 42bdcbd20c9a7ed18bc1376fa437fe79b77237a9610a17d1c1b884d57f4c0d29
 F document.tcl 2993fb82a29e60a15466e85e7d416781cf7eaa4390442922e27adf6e54a186f3
 F encrypt.tcl 8137afb09bf8f0548ab8220feae2ee49980eedf1b47c1eba8226cb91f4dc6662
 F event.tcl bf7548f7b6c7e92f70b14294d5cc7bae89c00dbfbe5afd51e5d7c17739f55b6a
@@ -354,7 +354,7 @@ F markPos.tcl 5088ee33556ccf507a3baca4a1c8637cf1021c60a96036f3ee7a6838e3ecf216
 F markdown.tcl 26036b169950ed8c896fa2476957201753ec16fd2fca9f0bab372ba35b6fc9c2
 F markup.tcl 0dd36f6b53cfba435683aa7760ff49fb663bd4df1768b1f0aa0b41b7490ebe20
 F morx.tcl 37fb7613d581a42f46980a5cb566772593958e2441da17a855993f396ffa6ffe
-F option.tcl da7543ef05c42644289ce608cec63489c51e9fc4ca123d58e68ec263b81d1fe2
+F option.tcl 704ea8580364dabe4245eaa600db4f1ad32e18779b0f69496f04e0a90a7d7f17
 F otLayout.tcl 8bb55cb2adcd4dc8e039e17cf4e22e038d62191e29371fefa1c64c1991ce0aeb
 F outline.tcl d3ba4f7ab32078cda6267c0b6bd1f1009e3c765f29b9ea854c59e5b29c504cb0
 F output.tcl 36356e34180547526eab8f671b91042456107e436401cb14160e623699fcd40a
@@ -397,7 +397,7 @@ F tests/afm.test 730621be45681198dcb117c01ca2accb6d25b5ceb668a6b6f6fa3677c13ac99
 F tests/all.tcl dff1741a8ac6cc92382eeec31e0d98e639a6d4d8b6a2908415323428f1c028d6
 F tests/annot.test cf8afe60078f4aeea2ea5af303ecbdeb2348e0ff60354fbb766ab5c424516beb
 F tests/annotShape.test d1f674866272ed2ca8d7a32776387578ef957437a974ce58560a88e5fbc3ef00
-F tests/attach.test 07b1d084e36b1f7190aec6b59f0e46ebc267d363d5b09d1343836e2e5e014995
+F tests/attach.test 82608006d5ba6edbf75deb9b351547a7c2dc8943fc1da2debd51508e21f9740c
 F tests/barcode.test 6864fa9e33ce7259155d0ed3ac6f4a30e248627987ff6338a771c5215af4c48f
 F tests/bidi.test ff69564a49dab8ba6cfc157a07e486783b2114686a54bfdd8cc55cbb0371e7a3
 F tests/color.test 461865510aff18cd664890116146f0174a919a06ca972448743fc1c74148d6e2
@@ -451,7 +451,7 @@ F tests/markdown.test bfc9cb7686c8252b2e2441e774f1b96a8b87760e99aa9a04b9247f942b
 F tests/markup.test f732cf7ebd41d6cc32c6d18bfc6975c0861a7c30410295cb6ced267f2e8174ca
 F tests/morx.test 0049621d687480672e51590568c9708ddd71bd7c4d97786ebd6b58a55f5b5849
 F tests/notoemoji.test 1c995040ab5c149a6b81dc73387740b50852e71c8370b23987a1e375be095ce2
-F tests/option.test 7f1a4ab58c4f04e100a42d7906d2628c9d5e51b238e28a73f5d7b6030553f477
+F tests/option.test 6e8cdde79c3049d459337dd496f495a7ad07071d3675707ce8b78605d8adfa3c
 F tests/outline.test 9225672a6e1c99dc59a3ad05c4309e9c34c8fc6ce1529704b8af3b5b77e5c1c7
 F tests/page.test e44b02da28cb9dfce94c5814f304fa65cf3e02f52305306734d6c624c06c48e6
 F tests/pageLabel.test 2e22d3e01c40673d5038e576f0ba0c9fa3c70a1c466f573b32439535f04c3275
@@ -487,7 +487,7 @@ F tests/viewerPreferences.test 2e4f7881daff2f1e093b676c9b25669b8636328b50b6683f0
 F tests/writer.test 5858be47dbd0a986000abfbe874e6768ba84eba22b2bd9c1e10e2f074b387989
 F tests/xObject.test a2fa0202373d8817935d193637d74445031f24bfb87cf3908b7a3f337e5950a0
 F tests/xmp.test a338dd400accda4c9b93307d0feb146cfee55a55c5a9d45047f285add8037db8
-F tests/zugferd.test 668e324fcee8fe4800a97d476138310e0e8d1b8490e67d9868c85bca9422a19e
+F tests/zugferd.test 14a26aa8bf169dec756cd7e4792e7a002b300e27421d866299f42876e3cb6c0b
 F text.tcl f58164a5f93d0e9c28e7d05f27a0bf551d42c54266420517934097dcfaaa904c
 F textAvoid.tcl 1bbb96cb2a679d0f926f42e0103aea52866eec3b7f3920e15de827cb5e223f83
 F textBlock.tcl f2feb99320a21a37962041693b5eb643631c28af00d4ba3ffcf86eba4246436c
@@ -522,9 +522,9 @@ F writer.tcl 8811bb2b6cb9e4742c6bf5a713089017e8778fa41356537a7b0787ad35b18835
 F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
 F xml.tcl 3abe87e2da0b29d2443e9e46a25284923cee6bd19b0b059f23e5da47bb816596
 F xmp.tcl 1fe4b3a7d45f98c270230cdac79d08fef4f3bec3bc9ca32c5032a709ebe092d5
-F zugferd.tcl 2f33ee8439a55c7d7b235e833f3f7c397d7b8c1746f0ec16b3e1425b34eb03af
-P 93c10257d7f7f0e7cf224cb3e2188f6661fd2f1782be421d12066075dfa57362
-R 26d67dbd45ca8d9ca469d485a1dc9e83
+F zugferd.tcl 9bab8b7d198a5dfdf6ded1d03b81fef9410f347ffc05bc763687990b440658fe
+P eb2f87ee60abe6e022aa0617843a41fcf3c20044391318402880fce288fc4718
+R 22719f078eff3c3d71a5399b19bb19fd
 U alex
-Z 30ca8629a2cba1f73755465c313fe1c2
+Z a3ed6c215038091e77f9f7a3191c9d45
 # Remove this line to create a well-formed Fossil manifest.

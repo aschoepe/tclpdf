@@ -15,7 +15,9 @@
 # and the next does not. This module exists so that there is one behaviour and
 # one wording.
 #
-# Every refusal made here carries an -errorcode below TCLPDF OPTION, so that
+# Every refusal made here carries an -errorcode below TCLPDF OPTION - the one
+# exception is [oneSource], which words a refusal for its caller and raises
+# the caller's own code - so that
 # [trap {TCLPDF OPTION}] catches a mistake in the CALL - a misspelt option
 # name, a value the option cannot take - as one class, wherever in the package
 # it was made. Without them a mistyped option was the one refusal in the
@@ -77,9 +79,18 @@ proc ::tclpdf::option::parse {defaults arguments {context {}}} {
   foreach {option value} $arguments {
     set name [string trimleft $option -]
     if {![dict exists $defaults $name]} {
+      # The message quotes the word through [Shown], the -errorcode carries
+      # it whole. Where a value has slipped into the place of an option - a
+      # missing value behind the last switch, "zugferd -data $xml -date",
+      # moves every word one place along - that word is the value, and the
+      # message used to be the whole invoice: 12 190 characters measured
+      # 2026-11-25. The code is not cut: its fourth word is the option as
+      # the caller named it (see the table above), a fact a handler may
+      # compare against, and a fact cut short is a wrong one. Where that
+      # word is a document, the code is as long as the document.
       return -code error \
           -errorcode [list TCLPDF OPTION UNKNOWN $option $context] \
-          "tclpdf: unknown option \"$option\"[Where $context] -\
+          "tclpdf: unknown option \"[Shown $option]\"[Where $context] -\
           known are: -[join [dict keys $defaults] { -}]"
     }
     dict set defaults $name $value
@@ -387,7 +398,8 @@ proc ::tclpdf::option::Where {context} {
 # whole invoice in the error message: 12 131 characters measured
 # 2026-11-25 for "zugferd -data $xml -date D:..." made before [zugferd]
 # took -data. The beginning is what tells a caller which call it was; the
-# rest they have in hand.
+# rest they have in hand. The same holds for the one word an unknown option
+# quotes, which is a value wherever a value has slipped into its place.
 #
 # Under Tcl 8.6 a character beyond the BMP is two string elements, and a cut
 # between them would end the quote in half a character - so a high
@@ -429,11 +441,50 @@ proc ::tclpdf::option::given {arguments name} {
 # and the pairs:
 #
 #   lassign [::tclpdf::option leading $args] path args
+#
+# The count decides, never the spelling: a first word that begins with "-" is
+# taken as the path all the same. A forgotten value behind the last switch -
+# "attach -data $xml -date" - therefore makes "-data" the path and the bytes
+# an option, and [parse] refuses the bytes as an unknown option (quoted
+# short, see there). That is how [image embed] and [font embed] read the same
+# call, measured 2026-11-25 - both take "-data" for the file name - and the
+# count is the only rule that can tell -data the option from a file that
+# happens to be called that (font.tcl, FontEmbed). A dash rule here alone
+# would make this pair of commands read a call differently from the other
+# two; the call is refused either way, only by another code.
 proc ::tclpdf::option::leading {arguments} {
   if {[llength $arguments] % 2} {
     return [list [lindex $arguments 0] [lrange $arguments 1 end]]
   }
   return [list {} $arguments]
+}
+
+# Exactly one source: the leading path of [leading] or -data, never both and
+# never neither. A caller who wrote both meant one of them, and which one is a
+# question only they can answer - taken as given, the file went in and the
+# bytes were dropped without a word ([attach] until 2026-11-25, [image embed]
+# until 2026-08-27). "given" is what [given] said of -data: presence, not
+# content, because an empty -data is a legal empty file.
+#
+#   ::tclpdf::option oneSource $path $given attach \
+#       {TCLPDF ATTACH ARGUMENT source}
+#
+# "what" names the command in the message; "errorcode" is the caller's whole
+# code, as for [aboveZero] in page.tcl - one shared wording, not one shared
+# class, because a caller catches ATTACH or ZUGFERD, never OPTION, for a call
+# that named its input twice. Asked before the file is read, so that a path
+# that does not exist is not what the refusal is about.
+proc ::tclpdf::option::oneSource {path given what errorcode} {
+  if {$path ne {} && $given} {
+    return -code error -errorcode $errorcode \
+        "tclpdf: $what takes a file name or -data, not both - the\
+        file would be embedded and the bytes dropped; name one of the two"
+  }
+  if {$path eq {} && !$given} {
+    return -code error -errorcode $errorcode \
+        "tclpdf: $what needs a file name or -data"
+  }
+  return
 }
 
 package provide tclpdf::option 1.5

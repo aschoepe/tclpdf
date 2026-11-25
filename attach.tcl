@@ -192,19 +192,23 @@ oo::define ::tclpdf::document::document {
     # -data is told from its absence by PRESENCE, not by content: an empty
     # attachment - a zero-byte marker file - is a legal thing to embed, and
     # "-data {}" used to be refused as "needs a file name or -data".
+    #
+    # One of the two, never both, and asked before the file is read - the
+    # rule of [zugferd], [font embed] and [image embed]. Measured 2026-11-25,
+    # before this: "attach blue.txt -data RED" embedded BLUE, and RED went
+    # nowhere without a word.
     set given [::tclpdf::option given $args data]
+    ::tclpdf::option oneSource $path $given attach \
+        {TCLPDF ATTACH ARGUMENT source}
     if {$path ne {}} {
       # Binary, always - see io.tcl for what that prevents.
       set bytes [::tclpdf::io read $path]
       if {[dict get $options name] eq {}} {
         dict set options name [file tail $path]
       }
-    } elseif {$given} {
+    } else {
       set bytes [dict get $options data]
       my CheckBytes $bytes "attach -data"
-    } else {
-      return -code error -errorcode [list TCLPDF ATTACH ARGUMENT source] \
-          "tclpdf: attach needs a file name or -data"
     }
     set name [dict get $options name]
     if {$name eq {}} {

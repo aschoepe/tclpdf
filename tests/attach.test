@@ -620,6 +620,46 @@ test attach-8.9 {-name takes no control character} -body {
 } -result {1 {TCLPDF ATTACH NAME} 1 1 {TCLPDF ATTACH NAME} 1 1 {TCLPDF ATTACH NAME} 1\
     1 {TCLPDF ATTACH NAME} 1 0 0}
 
+test attach-8.10 {a file AND -data is refused before the file is read, and the document goes on} -body {
+  # Measured 2026-11-25, before this: "attach blue.txt -data RED" embedded
+  # BLUE, and RED went nowhere without a word - the defect [image embed]
+  # lost on 2026-08-27. A path that does not exist gets the same refusal,
+  # not TCLPDF IO MISSING: the call is refused before the file is opened.
+  set source [::tclpdfTest::scratch attach-blue.txt]
+  set channel [open $source wb]
+  puts -nonewline $channel BLUE
+  close $channel
+  set doc [tclpdf new]
+  $doc page add
+  set before [$doc subscribers]
+  set out {}
+  lappend out [::tclpdfTest::refusal {$doc attach $source -data RED \
+      -name x.txt -compress 0 -date $attachMoment}]
+  catch {$doc attach $source -data RED -name x.txt -date $attachMoment} err
+  lappend out [string match {*attach takes a file name or -data, not both*} \
+      $err]
+  lappend out [::tclpdfTest::refusal {$doc attach \
+      [file join [temporaryDirectory] does-not-exist.txt] -data RED \
+      -name y.txt -date $attachMoment}]
+  # Neither is the same class, as it always was.
+  lappend out [::tclpdfTest::refusal {$doc attach -name z.txt \
+      -date $attachMoment}]
+  catch {$doc attach -name z.txt -date $attachMoment} err
+  lappend out [string match {*attach needs a file name or -data} $err]
+  # Nothing recorded, nothing hooked onto the bus - and the document is
+  # still good for the call the caller meant.
+  lappend out [$doc attachments] \
+      [string equal [$doc subscribers] $before]
+  $doc attach -data RED -name x.txt -compress 0 -date $attachMoment
+  set path [::tclpdfTest::scratch attach-one-source.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path $source
+  lappend out [regexp -all {stream\r?\nRED\r?\nendstream} $bytes] \
+      [regexp -all BLUE $bytes]
+} -result {{TCLPDF ATTACH ARGUMENT source} 1 {TCLPDF ATTACH ARGUMENT source} {TCLPDF ATTACH ARGUMENT source} 1 {} 1 1 0}
+
 # --- the names the hybrid standards reserve -------------------------------
 #
 # The only block here that needs an invoice, and with it tdom and an

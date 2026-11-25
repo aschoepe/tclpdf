@@ -328,4 +328,40 @@ test option-5.5 {leading splits an optional first word off the pairs} -body {
       [::tclpdf::option leading {}]
 } -result {{file.xml {-name x}} {{} {-name x}} {file.xml {}} {{} {}}}
 
+test option-5.6 {an unknown option that is a value is quoted short, and the code carries it whole} -body {
+  # "zugferd -data $xml -date" with the date forgotten: [leading] takes
+  # -data for the path, and the invoice arrives where an option belongs.
+  # The message was 12 190 characters on 2026-11-25; the code is the
+  # contract and keeps the word as it was given. [leading] goes by the
+  # count, not by the dash - as [image embed] and [font embed] do.
+  set value "<?xml [string repeat x 200]?>"
+  set code [::tclpdfTest::refusal {::tclpdf::option parse {data {} date {}} \
+      [list $value -date] zugferd}]
+  catch {::tclpdf::option parse {data {} date {}} [list $value -date] \
+      zugferd} message
+  list [string equal $code [list TCLPDF OPTION UNKNOWN $value zugferd]] \
+      [string length $message] \
+      [string equal $message "tclpdf: unknown option\
+          \"[string range $value 0 59]...\" for zugferd - known are: -data\
+          -date"] \
+      [string equal [::tclpdf::option leading [list -data $value -date]] \
+          [list -data [list $value -date]]]
+} -result {1 125 1 1}
+
+test option-5.7 {oneSource refuses a file AND -data, and neither, under the caller's code} -body {
+  set out {}
+  foreach {path given} {file.xml 1 {} 0 file.xml 0 {} 1} {
+    lappend out [::tclpdfTest::refusal {::tclpdf::option oneSource $path \
+        $given attach {TCLPDF ATTACH ARGUMENT source}}]
+    catch {::tclpdf::option oneSource $path $given attach \
+        {TCLPDF ATTACH ARGUMENT source}} message
+    lappend out $message
+  }
+  set out
+} -result [list {TCLPDF ATTACH ARGUMENT source} \
+    {tclpdf: attach takes a file name or -data, not both - the file would be embedded and the bytes dropped; name one of the two} \
+    {TCLPDF ATTACH ARGUMENT source} \
+    {tclpdf: attach needs a file name or -data} \
+    {no error: } {} {no error: } {}]
+
 cleanupTests
