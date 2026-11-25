@@ -233,31 +233,47 @@ oo::define ::tclpdf::document::document {
   }
 
   method WriteInfo {} {
-    # The generated date is stored back rather than made up per run: a second
-    # write of an unchanged document has to come out byte-identical, and a
-    # fresh timestamp is the one thing that would differ.
-    if {![dict exists $tclpdfInfo CreationDate]} {
-      # The file version decides how the zone offset is spelled: 2.0 dropped
-      # the apostrophe after the minutes.
-      #
-      # The seconds come from [my Created] - the same value that feeds
-      # xmp:CreateDate - rather than from a clock call of this method's own,
-      # which could land one second after the packet's.
-      dict set tclpdfInfo CreationDate \
-          [::tclpdf::pdfObj date [my Created] [$tclpdfWriter version]]
-    }
-    # ModDate the same way and from the same [my Created], which is the
-    # moment the packet's xmp:ModifyDate names when the caller set no
-    # ModDate (xmp.tcl, [packet]) - so the pair agrees to the second and the
-    # zone. Not copied from CreationDate: a CreationDate the caller set is
-    # theirs, and the packet does not take it for xmp:ModifyDate either.
-    # Measured 2026-11-25: a document without [info] wrote xmp:ModifyDate
-    # and no ModDate, although ISO 32000-2, 14.3.3 keeps exactly these two
-    # dates in the Info dictionary. Stored back like CreationDate, so a
-    # second write stays byte-identical.
-    if {![dict exists $tclpdfInfo ModDate]} {
-      dict set tclpdfInfo ModDate \
-          [::tclpdf::pdfObj date [my Created] [$tclpdfWriter version]]
+    # No date is stamped beside a packet the caller set with [metadata]:
+    # that packet is written exactly as it was set (xmp.tcl, [CheckCaller]),
+    # so its xmp:CreateDate and xmp:ModifyDate are the caller's - or absent -
+    # and a stamped date could only disagree with them. Measured 2026-11-25:
+    # a caller's packet without dates beside "pdfa -part 3" got both stamps,
+    # and veraPDF -f 1b answered 6.7.3-1 and 6.7.3-8 ("Info /ModDate = D:...,
+    # XMP xmp:ModifyDate = null"). Both entries are optional (ISO 32000-2,
+    # Table 349) and ISO 19005-1, 6.7.3 binds them only "if present", so an
+    # entry left out cannot disagree. A date the caller set with [info] is
+    # still written: matching it in the packet is the caller's business.
+    # The packet is the caller's when it is not the one xmp.tcl built last
+    # (xmpBuilt, empty when xmp.tcl never ran) - the test [XmpCatalog] uses.
+    # Nothing is stored back on this road, so the stamps return if the
+    # packet is taken away again.
+    if {$tclpdfXmp eq {} || $tclpdfXmp eq [my state xmpBuilt]} {
+      # The generated date is stored back rather than made up per run: a
+      # second write of an unchanged document has to come out byte-identical,
+      # and a fresh timestamp is the one thing that would differ.
+      if {![dict exists $tclpdfInfo CreationDate]} {
+        # The file version decides how the zone offset is spelled: 2.0
+        # dropped the apostrophe after the minutes.
+        #
+        # The seconds come from [my Created] - the same value that feeds
+        # xmp:CreateDate - rather than from a clock call of this method's
+        # own, which could land one second after the packet's.
+        dict set tclpdfInfo CreationDate \
+            [::tclpdf::pdfObj date [my Created] [$tclpdfWriter version]]
+      }
+      # ModDate the same way and from the same [my Created], which is the
+      # moment the packet's xmp:ModifyDate names when the caller set no
+      # ModDate (xmp.tcl, [packet]) - so the pair agrees to the second and
+      # the zone. Not copied from CreationDate: a CreationDate the caller set
+      # is theirs, and the packet does not take it for xmp:ModifyDate either.
+      # Measured 2026-11-25: a document without [info] wrote xmp:ModifyDate
+      # and no ModDate, although ISO 32000-2, 14.3.3 keeps exactly these two
+      # dates in the Info dictionary. Stored back like CreationDate, so a
+      # second write stays byte-identical.
+      if {![dict exists $tclpdfInfo ModDate]} {
+        dict set tclpdfInfo ModDate \
+            [::tclpdf::pdfObj date [my Created] [$tclpdfWriter version]]
+      }
     }
     set pairs {}
     dict for {key value} $tclpdfInfo {

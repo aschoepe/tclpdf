@@ -1,5 +1,5 @@
-C Refuse\sa\spath\sbeside\s-data\sin\sattach,\sand\squote\sa\slong\soption\sword\sin\sshort\n\n-\sattach:\sa\spath\sand\s-data\stogether,\sor\sneither,\sare\srefused\sas\sATTACH\sARGUMENT\ssource\sbefore\sanything\sis\sread;\sthe\scheck\sis\soption\soneSource,\sshared\swith\szugferd\n-\soption:\sthe\sUNKNOWN\srefusal\squotes\sthe\sword\sthrough\sShown,\sthe\s-errorcode\scarries\sit\swhole\n-\stests:\sattach-8.10,\soption-5.6,\soption-5.7,\szugferd-20.7\n-\smanual:\sattach\snames\sthe\sexclusion
-D 2026-11-25T10:58:22.908
+C Stamp\sno\sdates\sinto\sthe\sInfo\sdictionary\sbeside\sa\scaller's\sXMP\spacket\n\n-\soutput:\sCreationDate\sand\sModDate\sare\sstamped\sonly\swhen\sthe\spacket\sis\sthe\spackage's\sown;\svalues\sset\swith\sinfo\sare\swritten\sas\sbefore\n-\stests:\sxmp-5.10,\sxmp-5.11\n-\smanual\sand\sskill\sreference:\sinfo\sand\smetadata\sname\sthe\sexception
+D 2026-11-25T11:06:17.012
 F Makefile.in 0cd9a281fb6eed3403962cd07330196db2d1a5b8403ca33a721fd89c397c2b0b
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -35,14 +35,14 @@ F doc/claude/skills/tclpdf-tcl/reference/04-graphics.md ccededa506a6083a24d8f208
 F doc/claude/skills/tclpdf-tcl/reference/05-images-svg.md 9ce059120fd7dac06d69274760d7313a77b72ae80e3b41d075acf796f978cadf
 F doc/claude/skills/tclpdf-tcl/reference/06-tables.md e3a6411daecc40e12bf5177d21711db182e4a5224a905a7b055437e022fb685d
 F doc/claude/skills/tclpdf-tcl/reference/07-patterns-forms.md d4d5b9dc042e0b4f2430390e9a80a5d07d25595fbf624374f559873190c01d30
-F doc/claude/skills/tclpdf-tcl/reference/08-navigation-metadata.md 0f6815a55b4d7724e9f63dc90d95173f40c7603a4aae4f63e6074f17361ba956
+F doc/claude/skills/tclpdf-tcl/reference/08-navigation-metadata.md 8513a77485d7044706e6564deb60e1edfdb3258ac26b97d5d323c4f074968153
 F doc/claude/skills/tclpdf-tcl/reference/09-tagged-ua.md 7dc3cfe40086f6bc6971b03ef3645b2cc7326b26c1a427826008f65e233ad0fb
 F doc/claude/skills/tclpdf-tcl/reference/10-pdfa-zugferd.md cb885171b10ff0a84712289bcf2c81047a9f241026043c7caa21d10a95812df6
 F doc/claude/skills/tclpdf-tcl/reference/11-encryption-signatures.md 7bd44de0356d75bcaa4c8f80d6e6adf543e7ed04c601a3eeb56c637abf306468
 F doc/claude/skills/tclpdf-tcl/reference/12-import-update-info.md 104bdf7b603f2632a1cd17a5fd71717aeb4489ef7bd0e1b3eae5f24796bb72a0
 F doc/claude/skills/tclpdf-tcl/reference/13-form-fields.md d6dd58f4f6d4f250c4875e5bc13593cefa9625bc5d0f0773f70fbe5c79d34686
 F doc/tclpdf-default.html b543496816ce1ebbc250ce38eb1672a0a58cee20f635b1bd0d739a651a4cbe55
-F doc/tclpdf.md 42bdcbd20c9a7ed18bc1376fa437fe79b77237a9610a17d1c1b884d57f4c0d29
+F doc/tclpdf.md 05f496b3d0f4caf7296b3adc5c470f3a99b820ac4798cd99dc8405fe25a202a4
 F document.tcl 2993fb82a29e60a15466e85e7d416781cf7eaa4390442922e27adf6e54a186f3
 F encrypt.tcl 8137afb09bf8f0548ab8220feae2ee49980eedf1b47c1eba8226cb91f4dc6662
 F event.tcl bf7548f7b6c7e92f70b14294d5cc7bae89c00dbfbe5afd51e5d7c17739f55b6a
@@ -357,7 +357,7 @@ F morx.tcl 37fb7613d581a42f46980a5cb566772593958e2441da17a855993f396ffa6ffe
 F option.tcl 704ea8580364dabe4245eaa600db4f1ad32e18779b0f69496f04e0a90a7d7f17
 F otLayout.tcl 8bb55cb2adcd4dc8e039e17cf4e22e038d62191e29371fefa1c64c1991ce0aeb
 F outline.tcl d3ba4f7ab32078cda6267c0b6bd1f1009e3c765f29b9ea854c59e5b29c504cb0
-F output.tcl 36356e34180547526eab8f671b91042456107e436401cb14160e623699fcd40a
+F output.tcl a2c7b38723da2a9f245aebdf0f070eae95b3eb045ec195789a711e2502a2d442
 F page.tcl d9370e9dea5733eea87a067af7756a2c07a78622e2ab5d3e1286ada3b5bda047
 F pageLabel.tcl fa470a3e9d7926717fe46c846b223bf35c7bb17c52b7284c144f622c2b1e2934
 F pageNumber.tcl d8b3fd3d6b944d17c3af8f6cba7b1e5b37f0acc8bcf22e86f26ebc29579feba7
@@ -486,7 +486,7 @@ F tests/version.test 9a26b59c8ebb13ea4c82f6b3b0cd902c5a6a70eb6218f341b5c21024fd3
 F tests/viewerPreferences.test 2e4f7881daff2f1e093b676c9b25669b8636328b50b6683f0b9830771e0cd608
 F tests/writer.test 5858be47dbd0a986000abfbe874e6768ba84eba22b2bd9c1e10e2f074b387989
 F tests/xObject.test a2fa0202373d8817935d193637d74445031f24bfb87cf3908b7a3f337e5950a0
-F tests/xmp.test a338dd400accda4c9b93307d0feb146cfee55a55c5a9d45047f285add8037db8
+F tests/xmp.test 7629f800c0609051401e37702720e9b09f886e122b376474b5a2f64b8eacc9ce
 F tests/zugferd.test 14a26aa8bf169dec756cd7e4792e7a002b300e27421d866299f42876e3cb6c0b
 F text.tcl f58164a5f93d0e9c28e7d05f27a0bf551d42c54266420517934097dcfaaa904c
 F textAvoid.tcl 1bbb96cb2a679d0f926f42e0103aea52866eec3b7f3920e15de827cb5e223f83
@@ -523,8 +523,8 @@ F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
 F xml.tcl 3abe87e2da0b29d2443e9e46a25284923cee6bd19b0b059f23e5da47bb816596
 F xmp.tcl 1fe4b3a7d45f98c270230cdac79d08fef4f3bec3bc9ca32c5032a709ebe092d5
 F zugferd.tcl 9bab8b7d198a5dfdf6ded1d03b81fef9410f347ffc05bc763687990b440658fe
-P eb2f87ee60abe6e022aa0617843a41fcf3c20044391318402880fce288fc4718
-R 22719f078eff3c3d71a5399b19bb19fd
+P d0d192d70f28ed4685cfa746d7249fd9e6b5338bed82b1416a5555aed0fb57b0
+R 0ebdfbb1ea70ee6958993766d7572d9e
 U alex
-Z a3ed6c215038091e77f9f7a3191c9d45
+Z d3a9879a71b18112458a3adb4408da0c
 # Remove this line to create a well-formed Fossil manifest.

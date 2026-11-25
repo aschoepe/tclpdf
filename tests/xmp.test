@@ -452,6 +452,98 @@ test xmp-5.9 {a second write keeps ModDate and stays byte-identical} -constraint
       [string equal [::tclpdf::xmp::stampFromPdf $modDate] $modified]
 } -result {1 1 1}
 
+# A caller's packet claiming PDF/A-3B, with the dates given as XMP text -
+# either of them may be empty, and an empty one is left out.
+proc datedPacket {created modified} {
+  set dates {}
+  if {$created ne {}} {
+    append dates "<xmp:CreateDate>$created</xmp:CreateDate>"
+  }
+  if {$modified ne {}} {
+    append dates "<xmp:ModifyDate>$modified</xmp:ModifyDate>"
+  }
+  return "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>
+<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">
+  <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">
+    <rdf:Description xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\" rdf:about=\"\">
+      <pdfaid:part>3</pdfaid:part>
+      <pdfaid:conformance>B</pdfaid:conformance>
+    </rdf:Description>
+    <rdf:Description xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" rdf:about=\"\">$dates</rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end=\"w\"?>"
+}
+
+# How many of the two date rules of ISO 19005-1, 6.7.3 veraPDF's 1b profile
+# fails - 6.7.3-1 (CreationDate) and 6.7.3-8 (ModDate); 0 where veraPDF is
+# not installed. Only these two are counted: the document claims part 3, and
+# the 1b profile is used as a detector here, since 2b and 3b have no date
+# rule at all (measured 2026-11-25, veraPDF 1.30).
+proc dateRules1b {path} {
+  if {[auto_execok verapdf] eq {}} {
+    return 0
+  }
+  catch {exec verapdf -f 1b $path 2>@1} report
+  return [regexp -all \
+      {clause="6\.7\.3" testNumber="(?:1|8)" status="failed"} $report]
+}
+
+test xmp-5.10 {beside a caller's packet without dates, no date is stamped} -constraints {haveFace haveTdom} -body {
+  # Measured 2026-11-25: a packet set with [metadata] and carrying neither
+  # xmp:CreateDate nor xmp:ModifyDate still got CreationDate and ModDate
+  # stamped into the Info dictionary, and veraPDF -f 1b answered 6.7.3-1
+  # and 6.7.3-8 ("XMP xmp:ModifyDate = null"). Both with a PDF/A claim
+  # (xmp.tcl built a packet's worth of state) and without one (it never
+  # ran, xmpBuilt is empty). Nothing is stored back either.
+  set out {}
+  foreach claim {pdfa none} {
+    set doc [probe $face]
+    if {$claim eq "pdfa"} {
+      $doc pdfa -part 3 -conformance B
+    }
+    $doc metadata [datedPacket {} {}]
+    set path [::tclpdfTest::scratch xmp-caller-undated-$claim.pdf]
+    $doc write $path
+    set kept [list [$doc info CreationDate] [$doc info ModDate]]
+    $doc destroy
+    set bytes [::tclpdfTest::readBytes $path]
+    lappend out [regexp -all {/CreationDate } $bytes] \
+        [regexp -all {/ModDate } $bytes] $kept
+    if {$claim eq "pdfa"} {
+      lappend out [::tclpdfTest::verapdf $path 3b] [dateRules1b $path]
+    }
+    file delete $path
+  }
+  set out
+} -result {0 0 {{} {}} ok 0 0 0 {{} {}}}
+
+test xmp-5.11 {beside a caller's packet, dates set with info are written as set} -constraints {haveFace haveTdom} -body {
+  # The other half of xmp-5.10: what the caller put into the Info dictionary
+  # is theirs and goes out unchanged, and keeping it equal to the packet is
+  # the caller's business - done here, so the 1b detector has nothing to
+  # say. Compared as text.
+  set doc [probe $face]
+  $doc info CreationDate "D:20261125100000+01'00'"
+  $doc info ModDate "D:20261125110000+01'00'"
+  $doc pdfa -part 3 -conformance B
+  $doc metadata [datedPacket 2026-11-25T10:00:00+01:00 \
+      2026-11-25T11:00:00+01:00]
+  set path [::tclpdfTest::scratch xmp-caller-dated.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  set creationDate {}
+  set modDate {}
+  regexp {/CreationDate \((D:[^)]*)\)} $bytes -> creationDate
+  regexp {/ModDate \((D:[^)]*)\)} $bytes -> modDate
+  set result [list [string equal $creationDate "D:20261125100000+01'00'"] \
+      [string equal $modDate "D:20261125110000+01'00'"] \
+      [::tclpdfTest::verapdf $path 3b] [dateRules1b $path]]
+  file delete $path
+  set result
+} -result {1 1 ok 0}
+
 # --- the packet follows the document -----------------------------------------
 #
 # The packet is rebuilt on every write. It used to be built once and left
