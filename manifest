@@ -1,5 +1,5 @@
-C Version\s1.8\s-\sconfigure.ac\sand\stclpdf.tcl\scarry\s1.8,\sthe\smanual\ssynopsis\sfollows;\sconfigure\sregenerated\sby\sautoconf
-D 2026-11-25T15:57:56.169
+C Count\sthe\stag\snames\sof\s-markup\stags\sas\sfourteen\n\n-\smanual:\sthe\slist\sof\stag\snames\sincludes\sul,\sol\sand\sli,\sand\sthe\scount\ssays\sso
+D 2026-11-25T16:02:24.021
 F Makefile.in 0cd9a281fb6eed3403962cd07330196db2d1a5b8403ca33a721fd89c397c2b0b
 F README eb25feef54ba51cc238cdad1d5e209d3f604600ba9169b8d1f5ce9a9c6092ace
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -42,7 +42,7 @@ F doc/claude/skills/tclpdf-tcl/reference/11-encryption-signatures.md 7bd44de0356
 F doc/claude/skills/tclpdf-tcl/reference/12-import-update-info.md 104bdf7b603f2632a1cd17a5fd71717aeb4489ef7bd0e1b3eae5f24796bb72a0
 F doc/claude/skills/tclpdf-tcl/reference/13-form-fields.md d6dd58f4f6d4f250c4875e5bc13593cefa9625bc5d0f0773f70fbe5c79d34686
 F doc/tclpdf-default.html b543496816ce1ebbc250ce38eb1672a0a58cee20f635b1bd0d739a651a4cbe55
-F doc/tclpdf.md 4c2d67f2d618e46d372ee590b2d21dc074f2f3a736bd0478b626b9fb20a7b3ea
+F doc/tclpdf.md 6ff54d6e7a6e2bd42d3f32b6932ab75fbaf56ceb2ddfc5fbb510bfc9debcdf60
 F document.tcl 949296afc68d93aad17f8fc0be3aacf448f40dbce221393ecb6e87aebbd0e1ae
 F encrypt.tcl 8137afb09bf8f0548ab8220feae2ee49980eedf1b47c1eba8226cb91f4dc6662
 F event.tcl bf7548f7b6c7e92f70b14294d5cc7bae89c00dbfbe5afd51e5d7c17739f55b6a
@@ -529,8 +529,8 @@ F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
 F xml.tcl 3abe87e2da0b29d2443e9e46a25284923cee6bd19b0b059f23e5da47bb816596
 F xmp.tcl 1fe4b3a7d45f98c270230cdac79d08fef4f3bec3bc9ca32c5032a709ebe092d5
 F zugferd.tcl 9bab8b7d198a5dfdf6ded1d03b81fef9410f347ffc05bc763687990b440658fe
-P 00fef693311a26ac86279fdc3410b4bf81f90407d0c9c26c3b791159c03fdead
-R d8f9f4f6ea44c997cce71ad98a213d93
+P 6fddf51a77bd1bf4d4e9ae38fec9c9077b09b977397e6e6acaef4ad59405e162
+R 03dfed360f1464f1882004b7e89fe392
 U alex
-Z 9e382632cbebf21c87be878ffd648a5b
+Z 1eb429dd92ddc6917e8a90250779a57a
 # Remove this line to create a well-formed Fossil manifest.
