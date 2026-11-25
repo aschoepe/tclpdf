@@ -3395,4 +3395,10 @@ test import-25.17 {every refusal of round 8 leaves the document as it was} -body
 } -result {objstm 1 1 1 1 0 ascii85 1 1 1 1 0 version 1 1 1 1 0\
     generation 1 1 1 1 0}
 
+# The template every test above writes under the same name: a test that
+# does not delete it, or fails before it does, left it in the directory the
+# suite was started from (measured 2026-11-24, import-template.pdf in the
+# root of the tree).
+file delete -force [::tclpdfTest::scratch import-template.pdf]
+
 cleanupTests

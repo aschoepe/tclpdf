@@ -1,5 +1,5 @@
-C Take\spass-through\svalues\sby\sif/else\sinstead\sof\san\sexpr\sternary\n\n-\ssvg,\ssvgPaint,\spage,\stableLayout,\stextBlock,\sxmp:\sa\svalue\sread\sfrom\sa\sdictionary\swith\san\sempty\sor\sa\sname\sdefault\sis\staken\sby\sif/else,\sso\sexpr\snever\ssees\sit
-D 2026-11-24T22:14:30.589
+C Tidy\stwo\stests\safter\sthe\sfull\scheck\n\n-\stests:\sfileDecimal-7.1\scalls\sxml\sAttributes\swith\sthe\sdictionary\sthe\sparser\scaches\sentity\sexpansions\sin\n-\stests:\simport.test\sdeletes\sthe\stemplate\sit\swrites,\safter\sthe\slast\stest,\sso\snone\sis\sleft\sin\sthe\sdirectory\sthe\ssuite\swas\sstarted\sfrom
+D 2026-11-25T07:16:24.628
 F Makefile.in d91f5766c7267c53141b153feddddf9197a5bf92cdf5ab10a12126ba0e1fc13d
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -418,7 +418,7 @@ F tests/field.test dc1d2899e080d7ee9ed9f0c359ca14fa33be19eb26624c71e1103ff6a58fc
 F tests/fieldButton.test 8bb12e723c036ce3703294e1cde27b990c67cb84e27f706bb235ec35d3efe396
 F tests/fieldChoice.test d89c5560e13f9a80031c6b82f0439629516cab730f619395f1dd3acb34022190
 F tests/fieldText.test 740f30236c9e2769e5f046e5cd2fa6d16a55419f037337700aec2f463ed96f27
-F tests/fileDecimal.test 07f399b108bec1147f47eec9499335c50f7f0fbcf1625437945a2d60611c8c4e
+F tests/fileDecimal.test 3bb82f43b9a6eb3ca28ecfd9f0df98871a033f01d5dbad51f4e799949c551edb
 F tests/filter.test a42dd9303c499c4866b8f6693cb53e7a56ad0ea390b17c0be49b46cc889cf9fa
 F tests/filterCcitt.test 74002b8471633d2f813cd0076d136220e16c72a83b7119db003df3229064920e
 F tests/font.test 2a4a01215e15d8bf5985d5f3cfee0695a8abde2e45c10c7e2a51991b176ac097
@@ -435,7 +435,7 @@ F tests/hyphenate.test 9c283d5bbb4f9e48e3ef7ec19af2b0ca44376b4f80d36eb9c0240a42d
 F tests/image.test e7d6c221db24e9b896faf1d1a9fc1212ccfb338802a546d0267884277f1c5b03
 F tests/imageTiff.test 604ce332f35891bdafdc46e252585cd28a032f56b4c71994ced98f071001b269
 F tests/imageTiffStreams.test 22c06c95311e7c4f6d8b742bd595f0943ad04135fcb236fa2bcb1861d2ccd8a2
-F tests/import.test e8e52a88ea410c6354b8093bfca1269983d2e959648cd8b1c368d7f4965f5600
+F tests/import.test c43b1fda2f28f25a27cb68060d803ab12425e4a1557925fedecbf981deb7cabc
 F tests/importDecimal.test 63cd176982758242e0b50babbf3062091afb3e1d8c6d85301c61184fba045b8b
 F tests/importFields.test a71cde2e7350a870f6759927b435c1add3e1a30b5a894f980d6f5c57fcd083e8
 F tests/importLayer.test 33dff30aace8efa86b31882732e781990fbfda67adb1ffd8ed3cd408f5258a6b
@@ -523,8 +523,8 @@ F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
 F xml.tcl 3abe87e2da0b29d2443e9e46a25284923cee6bd19b0b059f23e5da47bb816596
 F xmp.tcl 1fe4b3a7d45f98c270230cdac79d08fef4f3bec3bc9ca32c5032a709ebe092d5
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 3a639893c3c364f128bb982aeff3f60e2ee974fc93f893d187fc8f86962401ff
-R 3ded12c8cade797d70a94b9fcb910119
+P 6c63a730b1aaf758e070cbeb72c3c71405693aea4d16eaa5d3c3a01f8454cba1
+R 07d6dcd2015203789deee2c49f4b7ed1
 U alex
-Z c6413b4928193856092c7f559c289686
+Z b1b8fdc3e2e94a14e7a31aa0f7cc28d2
 # Remove this line to create a well-formed Fossil manifest.
