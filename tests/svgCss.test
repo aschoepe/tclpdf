@@ -1,0 +1,309 @@
+# svgCss.test --
+#
+# The class rules of a <style> block: what is read, where it stands in the
+# cascade, and what [svg info] still reports.
+#
+# The stylesheet procedures are tested on their own first - they take text
+# and answer lists, no document needed. Everything after that is measured on
+# the CONTENT STREAM: a class that is applied shows up as the colour operator
+# in front of the shape, and one that is not leaves the initial black, 0 g.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::xml
+package require tclpdf::svg
+package require tclpdf::svgCss
+source [file join [file dirname [info script]] helper.tcl]
+
+# The official ZUGFeRD logo lies under docs/, which does not travel with the
+# package - the excerpt in svgCss-4.1 stands in for it where it is missing.
+set ::logoPath [file join [file dirname [file dirname [file normalize \
+    [info script]]]] docs ferd-net.de ZUGFeRD_2.5.2_DE Logos ZUGFeRD-Logo \
+    ZUGFeRD_Logo_RGB_screen.svg]
+testConstraint haveLogo [file readable $::logoPath]
+
+# One drawing, and what the page has to say about it - [svgProbe] in
+# helper.tcl, which svgClip.test asks as well.
+interp alias {} cssProbe {} ::tclpdfTest::svgProbe
+
+# The fill colour operators of a content stream, in order, without the
+# operator itself: "0 0 1 rg" comes back as {0 0 1}, "0 g" as {0}.
+proc fills {content} {
+  set found {}
+  foreach {-> operands} [regexp -all -inline -line {^([-0-9. ]+) (?:rg|g)$} \
+      $content] {
+    lappend found $operands
+  }
+  return $found
+}
+
+# --- the stylesheet -------------------------------------------------------
+
+test svgCss-1.1 {a class rule comes back as prelude and body} -body {
+  ::tclpdf::svgCss::rules {.a{fill:red}}
+} -result {{.a fill:red}}
+
+test svgCss-1.2 {a comma group selects every class in it} -body {
+  ::tclpdf::svgCss::selectors {.cls-1, .cls-2 ,.cls-3}
+} -result {{cls-1 cls-2 cls-3} 0}
+
+test svgCss-1.3 {a comment is taken out, inside a body as well} -body {
+  # The first comment holds a whole rule: read as CSS, .x would be a class.
+  ::tclpdf::svgCss::rules {/* .x{fill:red} */ .a{fill:/* not */blue}}
+} -result {{.a {fill: blue}}}
+
+test svgCss-1.4 {white space and line breaks around selector and body} -body {
+  # The layout an Illustrator export writes, taken from the ZUGFeRD logo.
+  set rules [::tclpdf::svgCss::rules "\n      .cls-1 {\n        fill:\
+      #0086b3;\n      }\n\n      .cls-1, .cls-2, .cls-3 {\n        stroke-width:\
+      0px;\n      }\n"]
+  lmap rule $rules {
+    list [lindex [::tclpdf::svgCss::selectors [lindex $rule 0]] 0] \
+        [string trim [lindex $rule 1]]
+  }
+} -result {{cls-1 {fill: #0086b3;}} {{cls-1 cls-2 cls-3} {stroke-width: 0px;}}}
+
+test svgCss-1.5 {an @-rule is skipped whole, nested braces included} -body {
+  # @media holds a rule of its own; a brace count that stopped at the first
+  # closing brace would hand ".b" the rest of the @media block.
+  set rules [::tclpdf::svgCss::rules {@font-face{font-family:x;src:url(a.woff)}
+      @media print{.a{fill:red}} @import url(x.css); .b{fill:blue}}]
+  list [llength $rules] [lmap rule $rules {
+    ::tclpdf::svgCss::selectors [lindex $rule 0]
+  }] [lindex $rules end]
+} -result {4 {{{} 1} {{} 1} {{} 1} {b 0}} {.b fill:blue}}
+
+test svgCss-1.6 {every selector that is not one class is not read} -body {
+  ::tclpdf::svgCss::selectors {rect, #id, .a .b, .a.b, rect.a, .a:hover, *,
+      .a>.b, .0123}
+} -result {{} 9}
+
+test svgCss-1.7 {and in a mixed group the class is read, the rest counted} -body {
+  ::tclpdf::svgCss::selectors {.a, rect, .b}
+} -result {{a b} 1}
+
+test svgCss-1.8 {a class name of digits stays text} -body {
+  # ".0123" is no CSS identifier; the escape is how a stylesheet names the
+  # class 0123. It must come back as the four characters - through expr it
+  # would be 83 under Tcl 8.6 and 123 under 9.0.
+  set names [lindex [::tclpdf::svgCss::selectors {.\30 123, .\38 3, .x010}] 0]
+  list $names [string equal [lindex $names 0] 0123] \
+      [string equal [lindex $names 1] 83]
+} -result {{0123 83 x010} 1 1}
+
+test svgCss-1.9 {!important is found per declaration} -body {
+  ::tclpdf::svgCss::important {fill: red ! important; stroke:blue;
+      Stroke-Width:2!IMPORTANT}
+} -result {fill stroke-width}
+
+test svgCss-1.10 {an unterminated block runs to the end of the text} -body {
+  # Quoted, with the braces escaped: the open brace would unbalance a
+  # braced word.
+  ::tclpdf::svgCss::rules ".a\{fill:red\} .b\{fill:blue"
+} -result {{.a fill:red} {.b fill:blue}}
+
+test svgCss-1.11 {a tail without a block comes back as an empty prelude} -body {
+  set rules [::tclpdf::svgCss::rules {.a{fill:red} junk}]
+  list $rules [::tclpdf::svgCss::selectors [lindex $rules end 0]]
+} -result {{{.a fill:red} {{} {}}} {{} 1}}
+
+# --- the cascade ----------------------------------------------------------
+
+test svgCss-2.1 {a class rule paints the shape} -body {
+  lassign [cssProbe {<style>.a{fill:#0000ff}</style>
+      <rect class="a" width="10" height="10"/>}] content info
+  list [fills $content] $info
+} -result {{{0 0 1}} {}}
+
+test svgCss-2.2 {a class rule beats the presentation attribute} -body {
+  # SVG 1.1, 6.4: the attribute is a rule of specificity zero at the start of
+  # the author stylesheet, so any class rule outranks it.
+  lassign [cssProbe {<style>.a{fill:#0000ff}</style>
+      <rect class="a" fill="#00ff00" width="10" height="10"/>}] content ->
+  fills $content
+} -result {{0 0 1}}
+
+test svgCss-2.3 {style="" beats a class rule} -body {
+  lassign [cssProbe {<style>.a{fill:#0000ff}</style>
+      <rect class="a" style="fill:#00ff00" width="10" height="10"/>}] content ->
+  fills $content
+} -result {{0 1 0}}
+
+test svgCss-2.4 {the later rule wins, not the later class name} -body {
+  # .a stands after .b in the stylesheet, so it wins in both orders of the
+  # attribute.
+  set answer {}
+  foreach classes {{a b} {b a}} {
+    lassign [cssProbe "<style>.a{fill:#ff0000}.b{fill:#0000ff}</style>
+        <rect class=\"$classes\" width=\"10\" height=\"10\"/>"] content ->
+    lappend answer [fills $content]
+    lassign [cssProbe "<style>.b{fill:#0000ff}.a{fill:#ff0000}</style>
+        <rect class=\"$classes\" width=\"10\" height=\"10\"/>"] content ->
+    lappend answer [fills $content]
+  }
+  set answer
+} -result {{{0 0 1}} {{1 0 0}} {{0 0 1}} {{1 0 0}}}
+
+test svgCss-2.5 {two classes set different properties and both apply} -body {
+  lassign [cssProbe {<style>.f{fill:#ff0000}.s{stroke:#0000ff;stroke-width:4}</style>
+      <rect class="f s" width="10" height="10"/>}] content ->
+  list [fills $content] [regexp {0 0 1 RG} $content] [regexp {\m4 w\M} $content]
+} -result {{{1 0 0}} 1 1}
+
+test svgCss-2.6 {a property set by class on a group is inherited} -body {
+  lassign [cssProbe {<style>.a{fill:#0000ff}</style>
+      <g class="a"><rect width="10" height="10"/>
+      <rect x="20" width="10" height="10" fill="#00ff00"/></g>}] content ->
+  # The second child's own attribute beats what it inherits.
+  fills $content
+} -result {{0 0 1} {0 1 0}}
+
+test svgCss-2.7 {the opacities through a class} -body {
+  lassign [cssProbe {<style>.a{fill:#0000ff;fill-opacity:0.5}</style>
+      <rect class="a" width="10" height="10"/>}] content info
+  # The same ExtGState the attribute fill-opacity="0.5" asks for.
+  list [regexp -all {/GS0_5f gs} $content] $info
+} -result {1 {}}
+
+test svgCss-2.8 {stop-color and stop-opacity through a class} -body {
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+      <defs><style>.s0{stop-color:#ff0000}.s1{stop-color:#0000ff}</style>
+      <linearGradient id="g"><stop class="s0" offset="0"/>
+      <stop class="s1" offset="1"/></linearGradient></defs>
+      <rect width="10" height="10" fill="url(#g)"/></svg>} -at {10 10} -width 50
+  set functions [::tclpdfTest::objects $doc /C0]
+  set info [$doc svg info]
+  $doc destroy
+  list [regexp {/C0 \[1 0 0\]} $functions] [regexp {/C1 \[0 0 1\]} $functions] $info
+} -result {1 1 {}}
+
+test svgCss-2.9 {a class rule reaches <use> and nested elements} -body {
+  lassign [cssProbe {<defs><style>.a{fill:#0000ff}</style>
+      <rect id="r" class="a" width="10" height="10"/></defs>
+      <use href="#r" x="20"/>}] content info
+  list [fills $content] $info
+} -result {{{0 0 1}} {}}
+
+test svgCss-2.10 {a class of digits matches as text} -body {
+  # class="0123" is selected by ".\30 123" and NOT by ".\38 3" - which is
+  # what a numeric comparison would answer, 0123 being 83 in octal.
+  lassign [cssProbe {<style>.\38 3{fill:#0000ff}</style>
+      <rect class="0123" width="10" height="10"/>}] octal ->
+  lassign [cssProbe {<style>.\30 123{fill:#ff0000}</style>
+      <rect class="0123" width="10" height="10"/>}] text ->
+  list [fills $octal] [fills $text]
+} -result {0 {{1 0 0}}}
+
+test svgCss-2.11 {a class names a colour the pre-pass refuses} -body {
+  # Asked BEFORE the drawing starts, like an attribute's: the page stays
+  # empty rather than carrying the shapes in front of the bad one.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  set code [::tclpdfTest::refusal {
+    $doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+        <style>.bad{fill:nosuchcolour}</style>
+        <rect fill="#ff0000" width="5" height="5"/>
+        <rect class="bad" width="5" height="5"/></svg>} -at {10 10} -width 50
+  }]
+  set content [$doc page content]
+  $doc destroy
+  list [lrange $code 0 1] [regexp {\mre\M} $content]
+} -result {{TCLPDF COLOUR} 0}
+
+test svgCss-2.12 {both XML parsers read the same stylesheet} -body {
+  ::tclpdfTest::bothParsers {
+    lassign [cssProbe {<style><![CDATA[ .a > .b {} .c{fill:#0000ff} ]]></style>
+        <rect class="c" width="10" height="10"/>}] content info
+    list [fills $content] $info
+  }
+} -result {{{{0 0 1}} {style 1}}}
+
+# --- what [svg info] still reports ---------------------------------------
+
+test svgCss-3.1 {a block read in full is no omission} -body {
+  lassign [cssProbe {<defs><style type="text/css">.a{fill:#0000ff}
+      .a, .b {stroke-width:0px}</style></defs>
+      <rect class="a" width="10" height="10"/>}] -> info
+  set info
+} -result {}
+
+test svgCss-3.2 {a block with an @font-face is reported, its classes read} -body {
+  lassign [cssProbe {<defs><style>@font-face{font-family:x;src:url(x.woff)}
+      .a{fill:#0000ff}</style></defs>
+      <rect class="a" width="10" height="10"/>}] content info
+  list [fills $content] $info
+} -result {{{0 0 1}} {style 1}}
+
+test svgCss-3.3 {a property a class cannot set is reported} -body {
+  # clip-path is read from an attribute and from style="", not from a class.
+  lassign [cssProbe {<defs><clipPath id="c"><rect width="5" height="5"/></clipPath>
+      <style>.a{clip-path:url(#c)}</style></defs>
+      <rect class="a" width="10" height="10"/>}] content info
+  list [regexp {W n} $content] $info
+} -result {0 {style 1}}
+
+test svgCss-3.4 {an !important declaration is not applied and is reported} -body {
+  lassign [cssProbe {<style>.a{fill:#0000ff !important}</style>
+      <rect class="a" width="10" height="10"/>}] content info
+  list [fills $content] $info
+} -result {0 {style 1}}
+
+test svgCss-3.5 {a block that is not text/css is not read} -body {
+  lassign [cssProbe {<style type="text/x-less">.a{fill:#0000ff}</style>
+      <rect class="a" width="10" height="10"/>}] content info
+  list [fills $content] $info
+} -result {0 {style 1}}
+
+test svgCss-3.6 {one report per block, however much is left in it} -body {
+  lassign [cssProbe {<style>rect{fill:red} #i{fill:red} @import url(x);</style>
+      <style>.a{fill:#0000ff}</style>
+      <rect class="a" width="10" height="10"/>}] -> info
+  set info
+} -result {style 1}
+
+# --- the ZUGFeRD logo -----------------------------------------------------
+
+test svgCss-4.1 {the logo's stylesheet, as an excerpt} -body {
+  # Its <style> block verbatim, a shape per class: blue, black, white.
+  lassign [cssProbe {<defs><style>
+      .cls-1 {
+        fill: #0086b3;
+      }
+
+      .cls-1, .cls-2, .cls-3 {
+        stroke-width: 0px;
+      }
+
+      .cls-3 {
+        fill: #fff;
+      }
+    </style></defs>
+    <rect class="cls-3" width="100" height="100"/>
+    <path class="cls-1" d="M10 10h20v20h-20z"/>
+    <path class="cls-2" d="M40 10h20v20h-20z"/>}] content info
+  list [fills $content] $info
+} -result {{1 {0 0.52549 0.70196} 0} {}}
+
+test svgCss-4.2 {the logo itself} -constraints haveLogo -body {
+  # One white background, one blue arrow pair, seven black letters - and not
+  # a black rectangle with an empty report, which it was until 2026-11-25.
+  set doc [tclpdf new -compress 0]
+  $doc page add
+  $doc svg $::logoPath -at {20 20} -width 100
+  set found [fills [$doc page content]]
+  set info [$doc svg info]
+  $doc destroy
+  list [lindex $found 0] [lindex $found 1] [llength [lsearch -all -exact \
+      $found 0]] [llength $found] $info
+} -result {1 {0 0.52549 0.70196} 7 9 {}}
+
+cleanupTests

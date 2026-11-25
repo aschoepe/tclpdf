@@ -22,7 +22,7 @@
 package require Tcl 8.6.11-
 package require tclpdf::pdfObj 1.9-
 package require tclpdf::svgPath 1.5-
-package require tclpdf::document 1.0-
+package require tclpdf::document 1.18-
 
 # The elements this module has a case for - the same names its switch takes,
 # in one place because [SvgCountOnly] has to know them too and a second copy
@@ -140,7 +140,7 @@ oo::define ::tclpdf::document::document {
         if {$name eq "defs"} {
           my SvgCountOnly $node
         }
-        # A <style> BLOCK IS AN OMISSION and is counted as one. It stands in
+        # A <style> BLOCK WAS AN OMISSION and was counted as one. It stands in
         # the drawable list because the element switch has a case for it, and
         # that made [SvgCountOnly] pass it over as well - so a drawing whose
         # shapes take their colour from a class came out in the initial
@@ -154,6 +154,10 @@ oo::define ::tclpdf::document::document {
         # an Illustrator export that keeps its classes in <defs><style>, as
         # are 38 of the 49 <style> blocks on this machine: a black rectangle
         # and an empty [svg info]. Both places ask [SvgStyleBlock] now.
+        #
+        # Since the same day its class rules are read (svgCss.tcl), and what
+        # is counted is what of the block was NOT read - an @font-face, an
+        # element selector, a property a class cannot set.
         if {$name eq "style"} {
           my SvgStyleBlock $node
         }
@@ -452,12 +456,13 @@ oo::define ::tclpdf::document::document {
     }
   }
 
-  # A <style> block with any CSS in it is counted as the omission "style";
-  # an empty one loses nothing and is not. ONE test for the two places that
+  # A <style> block with anything in it that is not applied is counted as
+  # the omission "style"; one whose rules were all read (svgCss.tcl), and an
+  # empty one, lose nothing and are not. ONE test for the two places that
   # meet the element - the element switch and [SvgCountOnly] - because the
   # second of them not asking it was the defect of 2026-11-25.
   method SvgStyleBlock {node} {
-    if {[string trim [::tclpdf::xml text $node]] ne {}} {
+    if {[my SvgCssUnread $node] > 0} {
       my SvgSkipped style
     }
     return

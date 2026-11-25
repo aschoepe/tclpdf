@@ -342,6 +342,21 @@ proc ::tclpdfTest::objects {doc pattern} {
   return $bodies
 }
 
+# One drawing of 100 by 100 units on a fresh page, and what the page has to
+# say about it: {content info} - the operators written, uncompressed, and
+# what [svg info] counted as lost. Here because a second test file wanted
+# it: svgClip.test had it first, svgCss.test asks the same two questions.
+proc ::tclpdfTest::svgProbe {body} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc svg -data "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\"\
+      height=\"100\" viewBox=\"0 0 100 100\">$body</svg>" \
+      -at {20 20} -size {100 100}
+  set result [list [$doc page content] [$doc svg info]]
+  $doc destroy
+  return $result
+}
+
 # Run a script under BOTH XML parsers and answer the unique results: tdom
 # where it is installed, and the built-in one either way. A drawing has to
 # come out the same whichever parsed it, and without this the fallback is

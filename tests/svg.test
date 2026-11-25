@@ -1348,13 +1348,18 @@ test svg-defs-20.5 {and what the package can draw is not counted as a loss} -bod
 # and <style> is in it. The official ZUGFeRD logo, an Illustrator export with
 # its classes in <defs><style>, came out a black rectangle with an empty
 # [svg info]; 38 of the 49 <style> blocks on this machine stand there.
+#
+# Since the same day a CLASS rule is read (svgCss.tcl, tests/svgCss.test) and
+# a block of nothing else is no omission any more. The blocks below carry an
+# element selector, which is not read - what these tests guard is the road
+# by which an unread block is counted, under <defs> and outside it.
 
 test svg-defs-20.6 {a <style> block under defs is counted as style} -body {
   set doc [tclpdf new]
   $doc page add
   $doc svg -data {<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">
-      <defs><style>.cls-1{fill:#0086b3}</style></defs>
-      <rect class="cls-1" width="9" height="9"/>
+      <defs><style>rect{fill:#0086b3}</style></defs>
+      <rect width="9" height="9"/>
     </svg>} -at {10 10} -width 50
   set skipped [$doc svg info]
   $doc destroy
@@ -1381,8 +1386,8 @@ test svg-defs-20.8 {a <style> block outside defs is still counted once} -body {
   set doc [tclpdf new]
   $doc page add
   $doc svg -data {<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">
-      <style>.cls-1{fill:#0086b3}</style>
-      <rect class="cls-1" width="9" height="9"/>
+      <style>rect{fill:#0086b3}</style>
+      <rect width="9" height="9"/>
     </svg>} -at {10 10} -width 50
   set skipped [$doc svg info]
   $doc destroy
@@ -1395,9 +1400,9 @@ test svg-defs-20.9 {one block in defs and one outside are counted as two} -body 
   set doc [tclpdf new]
   $doc page add
   $doc svg -data {<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">
-      <defs><style>.a{fill:red}</style></defs>
-      <style>.b{fill:blue}</style>
-      <rect class="a" width="9" height="9"/>
+      <defs><style>rect{fill:red}</style></defs>
+      <style>circle{fill:blue}</style>
+      <rect width="9" height="9"/>
     </svg>} -at {10 10} -width 50
   set skipped [$doc svg info]
   $doc destroy
@@ -2705,7 +2710,8 @@ test svg-r8-60.1 {the three silent omissions are counted} -body {
   # svg.tcl promises at its head that everything a drawing loses is reported
   # by [svg info]. Three of the four it names reported nothing: a <style>
   # block stood in the drawable list, and spreadMethod and gradientTransform
-  # are attributes, which leave no trace of their own.
+  # are attributes, which leave no trace of their own. (The <style> block
+  # carries an element selector: a class rule is read since 2026-11-25.)
   list [dict exists [svgInfoOf {<defs><linearGradient id="g"
           spreadMethod="reflect"><stop offset="0" stop-color="red"/>
           <stop offset="1" stop-color="blue"/></linearGradient></defs>
@@ -2714,8 +2720,8 @@ test svg-r8-60.1 {the three silent omissions are counted} -body {
           gradientTransform="rotate(90)"><stop offset="0" stop-color="red"/>
           <stop offset="1" stop-color="blue"/></linearGradient></defs>
           <rect width="9" height="9" fill="url(#g)"/>}] gradientTransform] \
-      [dict exists [svgInfoOf {<style>.a { fill: #0a0; }</style>
-          <rect class="a" width="9" height="9"/>}] style]
+      [dict exists [svgInfoOf {<style>rect { fill: #0a0; }</style>
+          <rect width="9" height="9"/>}] style]
 } -result {1 1 1}
 
 test svg-r8-60.2 {and a gradient without them reports nothing} -body {

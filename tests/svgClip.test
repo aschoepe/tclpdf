@@ -24,18 +24,9 @@ source [file join [file dirname [info script]] helper.tcl]
 
 testConstraint havePdftoppm [expr {[auto_execok pdftoppm] ne {}}]
 
-# One drawing, and what the page has to say about it: the operators written
-# and what [svg info] counted as lost.
-proc clipProbe {body} {
-  set doc [tclpdf new -unit mm -compress 0]
-  $doc page add
-  $doc svg -data "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\"\
-      height=\"100\" viewBox=\"0 0 100 100\">$body</svg>" \
-      -at {20 20} -size {100 100}
-  set result [list [$doc page content] [$doc svg info]]
-  $doc destroy
-  return $result
-}
+# One drawing, and what the page has to say about it - [svgProbe] in
+# helper.tcl, which svgCss.test asks as well.
+interp alias {} clipProbe {} ::tclpdfTest::svgProbe
 
 # The clipping shape used throughout: the left half of the drawing.
 set halfDefs {<defs><clipPath id="h"><rect x="0" y="0" width="50" height="100"/></clipPath></defs>}

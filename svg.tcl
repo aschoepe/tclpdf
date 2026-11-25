@@ -66,6 +66,10 @@
 #               inside a style="" attribute, which wins - !important and a
 #               /* comment */ are stripped from a declaration rather than
 #               taken for part of its value
+#   stylesheet  class rules of a <style> block, <defs> included: a single
+#               class or a comma group of them, the same set of properties,
+#               ranked between the attribute and style="" (SVG 1.1, 6.4) -
+#               svgCss.tcl, since 2026-11-25
 #   geometry    transform (translate, scale, rotate about a point, skewX,
 #               skewY, matrix), viewBox (a zero width or height there
 #               disables the drawing, SVG 7.7), the viewport of a nested
@@ -97,9 +101,10 @@
 #               requiredExtensions and systemLanguage all hold (SVG 5.8)
 #
 # NOT covered, and each for a reason rather than by omission: filters and
-# animation, CSS in a <style> block, spreadMethod and gradientTransform, and
-# objectBoundingBox units for a clip path or a mask - which do not occur in
-# the corpus at all. Every one of them is counted and reported by
+# animation, the part of CSS in a <style> block that is not a class rule
+# (@-rules, other selectors, !important - see svgCss.tcl), spreadMethod and
+# gradientTransform, and objectBoundingBox units for a clip path or a mask -
+# which do not occur in the corpus at all. Every one of them is counted and reported by
 # [svg info], so a caller can see what a drawing lost instead of finding out
 # from the page. That sentence was HALF TRUE until 2026-08-27, and the half
 # that was false is the reason it is spelled out here: a <style> block, a
@@ -108,6 +113,8 @@
 # module has a case for. All three are counted now - the <style> block since
 # 2026-11-25 also where it stands under <defs>, through [SvgStyleBlock] of
 # svgElement.tcl, which the defs tally had passed over for the same reason.
+# Since the same day the class rules of a block are read, and a block is
+# counted only when something in it was not.
 #
 # THE ONE THING THAT IS NOT REPORTABLE that way is an attribute, which is
 # why preserveAspectRatio is read although no file on this machine carries
@@ -132,7 +139,7 @@ package require tclpdf::io 1.0-
 package require tclpdf::afm 1.0-
 package require tclpdf::text 1.0-
 package require tclpdf::graphics 1.0-
-package require tclpdf::document 1.0-
+package require tclpdf::document 1.18-
 
 namespace eval ::tclpdf::svg {
   namespace export {[a-z]*}
@@ -303,6 +310,9 @@ oo::define ::tclpdf::document::document {
       # The defs go with it, because the <use> cycle check needs them and it
       # belongs on the same side of the mark.
       my state svgDefs [my SvgCollect $root [dict create]]
+      # The stylesheet as well (svgCss.tcl): a class can name the colour the
+      # pre-pass has to ask about.
+      my SvgCssCollect $root
       my SvgCheck $root
       lassign [my GraphicMark svg svg [dict get $options alt] \
           [dict get $options artifact] [expr {[dict get $options at] eq {} ?
@@ -719,8 +729,10 @@ oo::define ::tclpdf::document::document {
 
   method SvgCheckPaint {node seenVariable} {
     upvar 1 $seenVariable seen
-    set style [::tclpdf::xml attribute $node style]
-    set declarations [expr {$style eq {} ? {} : [my SvgDeclarations $style]}]
+    # Attribute, class rule, style="" - the order [SvgStyle] gives them, so
+    # that the value asked about here is the one that will be painted.
+    set declarations [dict merge [my SvgCssDeclarations $node] \
+        [my SvgDeclarations [::tclpdf::xml attribute $node style]]]
     foreach property {fill stroke color} {
       set value [::tclpdf::xml attribute $node $property]
       if {[dict exists $declarations $property]} {

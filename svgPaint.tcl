@@ -22,7 +22,22 @@
 package require Tcl 8.6.11-
 package require tclpdf::pdfObj 1.9-
 package require tclpdf::svgPath 1.5-
-package require tclpdf::document 1.0-
+package require tclpdf::document 1.18-
+
+namespace eval ::tclpdf::svgPaint {
+  # The properties the style cascade reads, from a presentation attribute,
+  # from a class rule and from style="" alike - ONE list, which [SvgStyle]
+  # walks and svgCss.tcl asks which declarations of a class rule it may
+  # apply. A property missing here is one a class cannot set either.
+  variable cascade {
+    fill stroke stroke-width stroke-linecap stroke-linejoin stroke-miterlimit
+    stroke-dasharray stroke-dashoffset fill-opacity stroke-opacity fill-rule
+    opacity font-size font-family font-weight text-anchor color display
+    visibility
+  }
+  # The two a <stop> reads on its own, outside the cascade - [SvgStops].
+  variable stop {stop-color stop-opacity}
+}
 
 oo::define ::tclpdf::document::document {
 
@@ -415,10 +430,7 @@ oo::define ::tclpdf::document::document {
     # inherit "none" from a sibling's declaration. So the slot is emptied
     # before the element's own value is read, exactly as opacity's is.
     dict set style display {}
-    foreach key {fill stroke stroke-width stroke-linecap stroke-linejoin
-        stroke-miterlimit stroke-dasharray stroke-dashoffset fill-opacity
-        stroke-opacity fill-rule opacity font-size font-family font-weight
-        text-anchor color display visibility} {
+    foreach key $::tclpdf::svgPaint::cascade {
       if {![dict exists $style $key]} {
         dict set style $key {}
       }
@@ -426,6 +438,14 @@ oo::define ::tclpdf::document::document {
       if {$value ne {}} {
         dict set style $key $value
       }
+    }
+    # A class rule of the drawing's stylesheet (svgCss.tcl) beats the
+    # presentation attribute and loses to style="" (SVG 1.1, 6.4): the
+    # attribute is a rule of specificity zero at the start of the author
+    # stylesheet. Written into the same dictionary, so a property a class
+    # sets on a <g> is inherited by its children like any other.
+    dict for {key value} [my SvgCssDeclarations $node] {
+      dict set style $key $value
     }
     # A declaration in style="" beats the presentation attribute (SVG 6.4).
     # Read through [SvgDeclarations], which is where !important and a CSS
@@ -764,7 +784,7 @@ oo::define ::tclpdf::document::document {
 
   # The stops of a gradient, as {offset colour opacity} triples. stop-color
   # and stop-opacity may sit in an attribute or inside style="" - both occur,
-  # the second more often.
+  # the second more often - and, since 2026-11-25, in a class rule.
   #
   # THE OFFSETS COME OUT IN ORDER, because the norm says how. SVG 1.1,
   # 13.2.4: "Each gradient offset value is required to be equal to or greater
@@ -788,7 +808,10 @@ oo::define ::tclpdf::document::document {
       if {[string map {svg: {}} [::tclpdf::xml name $child]] ne "stop"} {
         continue
       }
-      set declarations [my SvgDeclarations [::tclpdf::xml attribute $child style]]
+      # A class rule (svgCss.tcl) under style="", in the order [SvgStyle]
+      # gives the two.
+      set declarations [dict merge [my SvgCssDeclarations $child] \
+          [my SvgDeclarations [::tclpdf::xml attribute $child style]]]
       # In decimal, the per cent as the fraction: offset="010%" is a tenth.
       set offset [::tclpdf::pdfObj::decimal [::tclpdf::xml attribute $child offset 0]]
       if {[string match {*%} $offset]} {
@@ -872,4 +895,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::svgPaint 1.9
+package provide tclpdf::svgPaint 1.10

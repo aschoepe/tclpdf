@@ -397,6 +397,9 @@ oo::class create ::tclpdf::document::document {
       SvgClipRuleOf svgClip
       SvgClipOperators svgClip
       SvgClipMask svgClip
+      SvgCssCollect svgCss
+      SvgCssUnread svgCss
+      SvgCssDeclarations svgCss
       page page
       PageAdd page
       PageSize page
@@ -980,4 +983,4 @@ proc ::tclpdf::document::parseDate {value {version {}}} {
       zoneMinute $zoneMinute]
 }
 
-package provide tclpdf::document 1.17
+package provide tclpdf::document 1.18

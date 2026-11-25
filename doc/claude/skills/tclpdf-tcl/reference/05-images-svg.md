@@ -322,13 +322,15 @@ set doc [tclpdf new -unit mm]
 $doc page add
 $doc svg $svgFile -at {20 20} -width 60 -artifact 1
 
-# Whatever is not covered is skipped and COUNTED - filters, a <style> block,
-# animation, objectBoundingBox units. Everything under <defs> is counted too,
+# Whatever is not covered is skipped and COUNTED - filters, the part of a
+# <style> block that is not a class rule, animation, objectBoundingBox units. Everything under <defs> is counted too,
 # which is exactly where a filter is declared.
 puts "skipped: [$doc svg info]"
 
 # The counting is the promise, so it is worth seeing it fire: three things
-# this package does not build, in one drawing, each named in the answer.
+# this package does not build, in one drawing, each named in the answer. The
+# <style> block holds an ELEMENT selector, which is not read; a class rule
+# would be (see the next section).
 $doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" width="60" height="20"
     viewBox="0 0 60 20">
   <style>rect { stroke: black }</style>
@@ -425,7 +427,7 @@ puts "clip and mask: \"[$doc svg info]\" (empty = nothing skipped)"
 
 **What cannot be honoured is REPORTED and the element is then drawn whole** - visible and complete beats invisible or wrongly cut, and `svg info` says which happened: `objectBoundingBox` units (which occur in none of the 15046 SVG files measured), a reference to nothing, a transform on a clipping shape, a shape the package cannot draw, a mask that draws nothing, and a `mask-cycle` or `use-cycle`. A mask is converted to grey with the coefficients SVG 1.1, 14.4 names - 0.2125 R + 0.7154 G + 0.0721 B - and not with the ones a PDF reader applies to DeviceRGB in a DeviceGray group; for a grey or white mask, which is the common case, the two agree.
 
-**`svg info` is the whole answer to "what came out different from the file"**, so the list is long on purpose: `filter` and its primitives, `image`, `foreignObject` and every other element that is not drawn; `clipPathUnits`, `maskUnits`, `maskContentUnits` and `maskRegion` in `objectBoundingBox` units; a dangling `clip-path` or `mask`; a `use` nested deeper than 25 levels (`use-depth`); a negative width, height or radius (`rect-size`, `<name>-radius`); a family with no bold cut (`font-weight`); an unreadable `preserveAspectRatio`; a `<style>` block (counted wherever it stands, under `<defs>` too since 1.7.3 - an Illustrator export that keeps its colours in classes comes out in the initial colour and says so here), a `spreadMethod` and a `gradientTransform`, none of which is built; a `stop-opacity` below one; a stop for which no room is left in the ramp (`stop-offset`); an odd coordinate count on a `polyline` (`points`); a path that stopped at an error (`path-error`); a negative `viewBox` or nested viewport (`viewBox`, `viewport`).
+**`svg info` is the whole answer to "what came out different from the file"**, so the list is long on purpose: `filter` and its primitives, `image`, `foreignObject` and every other element that is not drawn; `clipPathUnits`, `maskUnits`, `maskContentUnits` and `maskRegion` in `objectBoundingBox` units; a dangling `clip-path` or `mask`; a `use` nested deeper than 25 levels (`use-depth`); a negative width, height or radius (`rect-size`, `<name>-radius`); a family with no bold cut (`font-weight`); an unreadable `preserveAspectRatio`; a `<style>` block with anything in it that is not read (`style`, once per block, wherever it stands, under `<defs>` too - an @-rule, a selector that is not one class, `!important`, a property a class cannot set such as `clip-path`; a block of class rules only is read in full and reported by nothing), a `spreadMethod` and a `gradientTransform`, neither of which is built; a `stop-opacity` below one; a stop for which no room is left in the ramp (`stop-offset`); an odd coordinate count on a `polyline` (`points`); a path that stopped at an error (`path-error`); a negative `viewBox` or nested viewport (`viewBox`, `viewport`).
 
 Two things about a drawing ARE refused rather than reported, and both are limits rather than judgements: a `use` element that reaches itself, directly or round a corner (`TCLPDF SVG REFERENCE cycle` - SVG 1.1, 5.6 calls it an error and the drawing has no rendering), and a drawing whose `use` elements unfold to more than 20 000 copies (`TCLPDF SVG LIMIT use`, since nesting them multiplies). The XML in front of them has its own: `TCLPDF XML ENTITY expansion` past a hundredfold of the document's length, `TCLPDF XML ENTITY cycle` for an entity defined in terms of itself, `TCLPDF XML ENTITY depth` for a chain more than 100 deep, and `TCLPDF SVG XML MALFORMED <class>` for a file that is not well-formed - the same code from `svg` and from `svg size`, with tdom and with the built-in parser alike, and a bare `&` or an undeclared `&name;` counts as malformed (since 1.7.3). A path error is **not** among them any more: it is drawn up to the command that failed and reported.
 
@@ -474,6 +476,33 @@ puts "weights: \"[$doc svg info]\" (empty = every cut was there)"
 ```
 
 The document's own weight is never inherited by a drawing: a drawing must not come out bold because the running text around it happens to be. `font-style` is not read.
+
+## Colours from a `<style>` block
+
+An Illustrator export keeps its colours in class rules, mostly under `<defs>`. Those are read: a rule whose selector is one class `.name`, alone or in a comma group, from every `<style>` block of the drawing, with the properties an attribute and `style=""` carry (`fill`, `stroke`, `stroke-width`, the opacities, `stop-color`/`stop-opacity` on a stop, and the rest of the painting set). The rank is SVG 1.1, 6.4: **attribute < class rule < `style=""`**, and of two class rules the later one in the stylesheet wins, not the later name in `class="a b"`.
+
+```tcl
+package require tclpdf
+set doc [tclpdf new -unit mm]
+$doc page add
+$doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" width="60" height="20"
+    viewBox="0 0 60 20">
+  <defs><style>
+    .brand { fill: #0086b3; }
+    .brand, .edge { stroke-width: 0px; }
+    .alert { fill: #c0392b; }
+  </style></defs>
+  <rect class="brand" width="20" height="20"/>
+  <rect class="brand" fill="#00ff00" x="20" width="20" height="20"/>
+  <rect class="alert brand" x="40" width="20" height="20"/>
+</svg>} -at {20 20} -width 60
+# Blue; blue again - the attribute loses to the class; red - .alert stands
+# later in the stylesheet than .brand, whatever order class= names them in.
+# The block is read in full, so there is nothing to report.
+puts "skipped: [$doc svg info]"
+```
+
+Not read - and reported as `style` - are @-rules (`@font-face`, `@media`), every other selector (`rect`, `#id`, `.a .b`, `.a.b`, `:hover`), a declaration marked `!important` (not applied at all: it would outrank `style=""`) and a property a class cannot set (`clip-path`, `mask`). The class rules beside them are applied all the same.
 
 ## The rules of the drawing that are easy to get wrong
 
