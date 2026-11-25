@@ -27,7 +27,10 @@
 # document, no font and no page; [::tclpdf::markup::parse] is a plain
 # procedure, which is what makes it testable on its own and keeps the block
 # road one road: with -markup tags the string is translated here and then
-# set exactly as a list the caller could have written by hand.
+# set exactly as a list the caller could have written by hand. Beside it
+# stands [::tclpdf::markup::repair], as plain: it writes the places [parse]
+# refuses as text and says which they were, for strings typed by people
+# (see the comment above it, at the end of this file).
 #
 # THE RULES, as the manual states them:
 #
@@ -73,6 +76,7 @@
 package require Tcl 8.6.11-
 
 namespace eval ::tclpdf::markup {
+  namespace export parse repair
   # The vocabulary, and what each name means to a run: the option it sets,
   # or "paragraph"/"heading"/"list" for the block-level ones. An item takes
   # its kind from the list around it - [emit] fills in the "item" option from
@@ -91,7 +95,8 @@ namespace eval ::tclpdf::markup {
 
 # The pairs a tagged string sets as. Every refusal names the position in the
 # string, counted in characters from 0, as the error codes of this package
-# count.
+# count. The stack holds {name href position} entries - the position where
+# the tag was opened, which is what an OPEN refusal names.
 proc ::tclpdf::markup::parse {text} {
   variable tags
   variable entities
@@ -239,14 +244,15 @@ proc ::tclpdf::markup::parse {text} {
           "tclpdf: <$name> at position $position takes no attribute -\
           only <a href=\"...\"> does"
     }
-    lappend stack [list $name $href]
+    lappend stack [list $name $href $position]
     set boundary [expr {$block || $item}]
     incr position [string length $whole]
   }
   if {[llength $stack]} {
-    return -code error -errorcode [list TCLPDF TEXT MARKUP OPEN [lindex $stack end 0]] \
-        "tclpdf: <[lindex $stack end 0]> is still open at the end of the\
-        text - close it with </[lindex $stack end 0]>"
+    lassign [lindex $stack end] name - start
+    return -code error -errorcode [list TCLPDF TEXT MARKUP OPEN $name $start] \
+        "tclpdf: <$name> at position $start is still open at the end of the\
+        text - close it with </$name>"
   }
   lassign [emit $pairs $buffer $stack] pairs buffer
   return $pairs
@@ -291,4 +297,89 @@ proc ::tclpdf::markup::emit {pairs buffer stack} {
   return [list $pairs {}]
 }
 
-package provide tclpdf::markup 1.2
+# --- repair ------------------------------------------------------------------
+#
+# WHY A REPAIR, AND NOT A LENIENT READING (the author's decision, 2026-11-25).
+# Text people type into a form field - a remark on an order, a comment - may
+# hold one "<" in front of a letter, and the strict reading refuses the whole
+# paragraph for it. That stays: [parse] and -markup never guess. A caller who
+# wants "that one place as text, the rest formatted" calls [repair] himself,
+# and it tells him what it did: the string with every refused place written
+# as text - visible, "<x>" stays "<x>" - and the list of the error codes it
+# removed, to be logged or shown. The repaired string is then set the strict
+# way, by the same -markup as before.
+#
+# HOW: [parse] is the judge, and the error code names the place. Every code
+# of the tags ends in a position. Where the character there is a "<" - an
+# unknown tag, a closing tag that is not the innermost, a tag where it may
+# not stand, an <a> without href, a tag with an attribute, a tag still open
+# at the end - that "<" is written &lt;, which makes the whole tag text. The
+# other two refusals are not repaired, because no escape makes them right:
+# text directly inside <ul> or <ol> (NESTING li at that text) and a line
+# feed inside an <li>; they are thrown on unchanged, as is everything
+# else no rule fits. Nothing is dropped in silence.
+
+# The string a refusal leaves: the tag at the position the code names written
+# as text, or the string as it was where the position holds no "<".
+proc ::tclpdf::markup::Literal {text code} {
+  variable entities
+  set position [lindex $code end]
+  if {[string index $text $position] ne "<"} {
+    return $text
+  }
+  return [string replace $text $position $position \
+      [lindex [dict keys [dict filter $entities value <]] 0]]
+}
+
+# A string the strict reading refuses, made one it takes; see the comment
+# above. Answers {text <the string> faults <the codes removed, in order>}.
+proc ::tclpdf::markup::repair {text} {
+  return [repairWith $text MARKUP ::tclpdf::markup::parse ::tclpdf::markup::Literal]
+}
+
+# The loop both notations repair with: read the string with "parse", hand
+# each refusal of the topic "notation" to "literal", which answers the string
+# with the refused place written as text, and read it again, until it is
+# taken.
+#
+# Public because it is shared by the Markdown translator (markdown.tcl),
+# like [emit]: the loop and its guard exist once.
+#
+# A place written as text never opens, closes or refuses anything again, so
+# every round turns at least one character of the string into text for good,
+# and there are no more rounds than characters. A string still refused after
+# that many is a defect, refused as TCLPDF TEXT <notation> REPAIR with the
+# count, never a loop. A refusal "literal" cannot repair - it answers the
+# string unchanged - is thrown on as it came, and so is any other error; its
+# position counts in the string as far as it was repaired, which is the
+# string as handed in where nothing was repaired in front of that place.
+# The positions are whole numbers out of the error code; the string itself
+# is only cut and spliced, never read as a number, so "0123" stays "0123".
+proc ::tclpdf::markup::repairWith {text notation parse literal} {
+  set faults {}
+  set limit [string length $text]
+  while {[catch {{*}$parse $text} message options]} {
+    set code [dict get $options -errorcode]
+    if {[lrange $code 0 2] ne [list TCLPDF TEXT $notation]} {
+      return -options $options $message
+    }
+    if {[llength $faults] >= $limit} {
+      # Each code written out, so that the table of codes reads its class.
+      set message "tclpdf: the string is still refused after $limit repairs,\
+          one for each of its characters ($code) - a defect of the repair"
+      if {$notation eq "MARKDOWN"} {
+        return -code error -errorcode [list TCLPDF TEXT MARKDOWN REPAIR $limit] $message
+      }
+      return -code error -errorcode [list TCLPDF TEXT MARKUP REPAIR $limit] $message
+    }
+    set repaired [{*}$literal $text $code]
+    if {$repaired eq $text} {
+      return -options $options $message
+    }
+    lappend faults $code
+    set text $repaired
+  }
+  return [dict create text $text faults $faults]
+}
+
+package provide tclpdf::markup 1.3

@@ -33,7 +33,9 @@
 # position; a closing one has to close the innermost open run; a "*" in
 # front of a space is text ("5 * 3"). No flanking rules to look up, and no
 # price that quietly falls back to plain text because one "*" was
-# forgotten. Both translators end in the same list of {text options} pairs
+# forgotten. Where the text comes from people - a form field, a remark -
+# page three shows the way the caller takes on purpose: [repair] writes each
+# refused place as text and names it, and the result is set the strict way. Both translators end in the same list of {text options} pairs
 # - built by one procedure from one vocabulary - and from there the road is
 # one road, which is what the last line of page two measures rather than
 # claims: the two notations break into the same lines, runs and options
@@ -95,6 +97,40 @@ set y [exampleTypedAndSet $doc "Written in Markdown" $markdown markdown $block]
 # by exampleSameLines in common.tcl, shared with 1.19.
 exampleSameLines $doc $tagged $markdown $block $y
 
+# PAGE THREE, USER INPUT, REPAIRED: a note typed into a form field, with a
+# "**" its writer never closed and a "[4711]" that is no link. The strict
+# reading refuses the whole paragraph - the first refusal is caught and
+# shown. ::tclpdf::markdown::repair writes both places as text, with a
+# backslash, and the paragraph is then set the strict way: the two places
+# appear as typed, the rest is formatted, and the codes it removed are
+# printed underneath, which is what a caller would log.
+set typed {Delivery note: please ring at the side door **before noon - the gate code is [4711], and the parcel goes to *Ms Example* at the desk.}
+$doc page add
+$doc font -family helvetica -size 14 -style bold -color black
+$doc text "User input, repaired" -at {20 22}
+$doc font -size 8 -style {} -color {0.45 0.45 0.45}
+$doc text "As typed:" -at {20 32}
+$doc font -family courier -size 7.5 -color black
+set y [$doc text $typed -at {20 37} -width 170]
+$doc font -family helvetica -size 8 -color {0.45 0.45 0.45}
+if {![catch {$doc text $typed -at [list 20 [expr {$y + 8}]] -width 170 -markup markdown} \
+        why refusal]} {
+    puts "  the note was not refused - the example lost its point"
+    exit 1
+}
+set y [$doc text "With -markup markdown the paragraph is refused:\
+    [dict get $refusal -errorcode]" -at [list 20 [expr {$y + 8}]] -width 170]
+set repair [::tclpdf::markdown::repair $typed]
+$doc text "Set from \[::tclpdf::markdown::repair\] with -markup markdown:" \
+    -at [list 20 [expr {$y + 6}]]
+$doc font -size 10 -color black
+set y [$doc text [dict get $repair text] -at [list 20 [expr {$y + 15}]] {*}$block \
+    -markup markdown]
+$doc font -size 8 -color {0.45 0.45 0.45}
+$doc text "Written as text, in this order:" -at [list 20 [expr {$y + 8}]]
+$doc font -family courier -size 7.5 -color black
+$doc text [join [dict get $repair faults] \n] -at [list 20 [expr {$y + 13}]] -width 170
+
 exampleFooter $doc
 $doc write $target
 $doc destroy
@@ -106,4 +142,9 @@ foreach notation {markup markdown} source [list $tagged $markdown] {
     foreach {text options} [lrange [::tclpdf::${notation}::parse $source] 0 5] {
         puts "      [format %-40s [list $text]] [list $options]"
     }
+}
+puts "  the user input: refused as [dict get $refusal -errorcode];\
+    repaired, written as text:"
+foreach code [dict get $repair faults] {
+    puts "    $code"
 }

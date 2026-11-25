@@ -6,7 +6,8 @@
 # parser knows no document, so most of these tests need none; what they
 # check is the subset, the strictness, the escapes and every refusal by
 # name. The fifth group sets the same paragraph in both notations and
-# compares the pairs and the bytes; the sixth reads lists.
+# compares the pairs and the bytes; the sixth reads lists; the seventh
+# repairs what a person typed.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
@@ -300,5 +301,113 @@ test markdown-6.11 {a refusal at the end of an item names the item} -body {
   catch {$P "- a *b\nc*"} msg
   list [regexp {list item ends at position 6} $msg] [regexp {opened at position 4} $msg]
 } -result {1 1}
+
+# --- repair: the refused places written as text --------------------------------
+#
+# [repair] is for strings typed by people: every place [parse] refuses is
+# written with backslashes, the rest stays formatted, and the codes it
+# removed come back in order. The cases of 7.1 are the measurement that led
+# to it; the 7.2 pairs show "one place text, the rest formatted".
+
+set R ::tclpdf::markdown::repair
+
+# Each case: the string, the string repaired, the codes removed.
+set repairCases [list \
+    {Preis **fett ohne Schluss, aber *kursiv* geht} \
+    {Preis \*\*fett ohne Schluss, aber *kursiv* geht} \
+    {{TCLPDF TEXT MARKDOWN OPEN ** 6}} \
+    {siehe [1] und **das hier**} \
+    {siehe \[1] und **das hier**} \
+    {{TCLPDF TEXT MARKDOWN LINK 6}} \
+    "#### vier Rauten\nZweite Zeile mit **fett**" \
+    "\\#\\#\\#\\# vier Rauten\nZweite Zeile mit **fett**" \
+    {{TCLPDF TEXT MARKDOWN HEADING 0}} \
+    {a **b *c** d*} \
+    {a \*\*b *c\*\* d*} \
+    {{TCLPDF TEXT MARKDOWN NESTING ** 8} {TCLPDF TEXT MARKDOWN OPEN ** 2}} \
+    {[Text](url mit leer) und *em*} \
+    {\[Text](url mit leer) und *em*} \
+    {{TCLPDF TEXT MARKDOWN LINK 0}} \
+    {~~durch und **fett**} \
+    {\~\~durch und **fett**} \
+    {{TCLPDF TEXT MARKDOWN OPEN ~~ 0}} \
+    {**fett** und [Link](https://x.y) und [sic} \
+    {**fett** und [Link](https://x.y) und \[sic} \
+    {{TCLPDF TEXT MARKDOWN LINK 37}} \
+]
+
+test markdown-7.1 {repair escapes every refused place and names the codes it removed, in order} -body {
+  set out {}
+  foreach {text repaired faults} $repairCases {
+    set answer [$R $text]
+    lappend out [expr {[dict get $answer text] eq $repaired}] \
+        [expr {[dict get $answer faults] eq $faults}]
+  }
+  set out
+} -result {1 1 1 1 1 1 1 1 1 1 1 1 1 1}
+
+test markdown-7.2 {the repaired string is taken by the strict reading: one place text, the rest formatted} -body {
+  lmap {text repaired faults} $repairCases {
+    $P [dict get [$R $text] text]
+  }
+} -result {{{Preis **fett ohne Schluss, aber } {} kursiv {em 1 style italic} { geht} {}} {{siehe [1] und } {} {das hier} {strong 1 style bold}} {{#### vier Rauten
+Zweite Zeile mit } {} fett {strong 1 style bold}} {{a **b } {} {c** d} {em 1 style italic}} {{[Text](url mit leer) und } {} em {em 1 style italic}} {{~~durch und } {} fett {strong 1 style bold}} {fett {strong 1 style bold} { und } {} Link {url https://x.y} { und [sic} {}}}
+
+test markdown-7.3 {a string without a fault comes back unchanged, with no codes} -body {
+  lmap text {{*ein* *offen *zwei*} {Der **Betrag** ist [hier](https://x.y)} {} {5 * 3}} {
+    expr {[$R $text] eq [dict create text $text faults {}]}
+  }
+} -result {1 1 1 1}
+
+test markdown-7.4 {a string of digits stays text, and a refusal beside digits leaves them as typed} -body {
+  list [$R 0123] [$R **0123] [$P [dict get [$R **0123] text]]
+} -result {{text 0123 faults {}} {text {\*\*0123} faults {{TCLPDF TEXT MARKDOWN OPEN ** 0}}} {**0123 {}}}
+
+test markdown-7.5 {an escape already written is not escaped again} -body {
+  list [dict get [$R {\*a **b}] text] [dict get [$R {\\**a}] text] [dict get [$R {\[1] und [2]}] text]
+} -result {{\*a \*\*b} {\\\*\*a} {\[1] und \[2]}}
+
+test markdown-7.6 {NESTING at a line marker, at the end of a heading and at the end of a link text} -body {
+  set out {}
+  foreach text [list "*a\n- b*" "*a\n12. b" "# a **b\nc" {[a **b](u) c}] {
+    set answer [$R $text]
+    lappend out [dict get $answer text] [dict get $answer faults] \
+        [$P [dict get $answer text]]
+  }
+  set out
+} -result {{*a
+\- b*} {{TCLPDF TEXT MARKDOWN NESTING - 3}} {{a
+- b} {em 1 style italic}} {\*a
+12\. b} {{TCLPDF TEXT MARKDOWN NESTING 12. 3} {TCLPDF TEXT MARKDOWN OPEN * 0}} {{*a
+12. b} {}} {# a \*\*b
+c} {{TCLPDF TEXT MARKDOWN NESTING ** 7}} {{a **b} {heading 1} {
+} {} c {}} {\[a \*\*b\](u) c} {{TCLPDF TEXT MARKDOWN NESTING \]( 6} {TCLPDF TEXT MARKDOWN LINK 0} {TCLPDF TEXT MARKDOWN OPEN ** 4}} {{[a **b](u) c} {}}}
+
+test markdown-7.7 {the whole delimiter is escaped, so that *** leaves no em behind} -body {
+  set answer [$R ***x]
+  list [dict get $answer text] [$P [dict get $answer text]]
+} -result {{\*\*\*x} {***x {}}}
+
+test markdown-7.8 {a repair that does not end is refused after one round per character, not looped} -setup {
+  rename ::tclpdf::markdown::parse ::tclpdf::markdown::parseSaved
+  # A reader that refuses the last "*" whatever stands in front of it: the
+  # repair writes a backslash, and the reader refuses the same "*" again.
+  proc ::tclpdf::markdown::parse {text} {
+    set at [string last * $text]
+    if {$at < 0} {
+      return {}
+    }
+    return -code error -errorcode [list TCLPDF TEXT MARKDOWN OPEN * $at] refused
+  }
+} -body {
+  ::tclpdfTest::refusal {$R a*}
+} -cleanup {
+  rename ::tclpdf::markdown::parse {}
+  rename ::tclpdf::markdown::parseSaved ::tclpdf::markdown::parse
+} -result {TCLPDF TEXT MARKDOWN REPAIR 2}
+
+test markdown-7.9 {repair is exported beside parse and needs no document} -body {
+  lsort [namespace eval ::tclpdf::markdown {namespace export}]
+} -result {parse repair}
 
 cleanupTests

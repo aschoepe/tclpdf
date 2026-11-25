@@ -140,7 +140,10 @@ foreach {label body columns} {
 # people may hold a lone asterisk, and the package refuses it rather than
 # guess. The didParseCell hook runs before anything is measured; it tries
 # the translation itself and, where that fails, sets the cell plain, as
-# it stands - a decision written by the caller, in the caller's words.
+# it stands - a decision written by the caller, in the caller's words. A
+# caller who wants the rest of such a cell formatted sets the text from
+# [::tclpdf::markdown::repair] instead, which writes only the refused
+# places as text (example 1.17, page three).
 package require tclpdf::markdown
 proc plainWhereRefused {cell doc} {
     if {[dict get $cell section] eq "body" && [dict get $cell column] == 1

@@ -37,7 +37,10 @@
 # out of markup.tcl's [emit], from a stack that carries markup.tcl's names
 # (strong, em, s, a, h1 to h3, ul, ol, li). There is one vocabulary, not two: what
 # "strong" does to a run is decided there alone, so a paragraph written in
-# either notation gives the identical list.
+# either notation gives the identical list. Beside the translator stands
+# [::tclpdf::markdown::repair], which writes the places [parse] refuses as
+# text and says which they were, for strings typed by people (see the
+# comment above it, at the end of this file).
 #
 # THE RULES, as the manual states them:
 #
@@ -86,9 +89,10 @@
 #
 
 package require Tcl 8.6.11-
-package require tclpdf::markup 1.1-
+package require tclpdf::markup 1.3-
 
 namespace eval ::tclpdf::markdown {
+  namespace export parse repair
   # How each name the stack can carry is written in Markdown - the spelling
   # a refusal quotes. What a name DOES to a run is not here: that is
   # markup.tcl's vocabulary, read by [::tclpdf::markup::emit].
@@ -392,4 +396,90 @@ proc ::tclpdf::markdown::LinkClose {} {
   return
 }
 
-package provide tclpdf::markdown 1.1
+# --- repair ------------------------------------------------------------------
+#
+# WHY A REPAIR, AND NOT A LENIENT READING (the author's decision, 2026-11-25).
+# Text people type into a form field may hold one stray "*" or a "[1]", and
+# the strict reading above refuses the whole paragraph for it. That stays:
+# [parse] and -markup markdown never guess. A caller who wants "that one
+# place as text, the rest formatted" calls [repair] himself, and it tells
+# him what it did: the string with every refused place written with
+# backslashes - visible, "**" stays "**" and "[1]" stays "[1]" - and the list
+# of the error codes it removed, to be logged or shown. The repaired string
+# is then set the strict way.
+#
+# HOW: [parse] is the judge, the error code names the place, and the loop
+# with its guard is markup.tcl's [repairWith], shared with the tags. What
+# each code makes text:
+#
+#   OPEN delimiter position     the WHOLE delimiter at the position. Only its
+#                               first character is wrong, measured: "\**x"
+#                               is a literal "*" and a "*" that opens em.
+#   NESTING delimiter position  the same, where the delimiter stands at the
+#                               position - a closer that is not the innermost
+#                               one, the marker of a line that begins inside
+#                               an open run, the "](" of a link text with a
+#                               run still open. Where the position holds the
+#                               line feed that ends a heading or an item, the
+#                               run still open there is at fault: the text in
+#                               front of the line feed, read alone, names it
+#                               (OPEN, or LINK for a link the line feed
+#                               cuts), and that place is made text.
+#   LINK position               the "[" at the position.
+#   HEADING position            the run of "#" at the position.
+#
+# Only the characters a backslash turns into text get one - "1." becomes
+# "1\.", "](" becomes "\](" -, since a backslash in front of anything else
+# would be text itself. A refusal no rule fits is thrown on unchanged.
+
+# The string a refusal leaves: the place the code names written as text, or
+# the string as it was where no rule fits.
+proc ::tclpdf::markdown::Literal {text code} {
+  variable escapable
+  lassign [lrange $code 3 end] kind first second
+  set delimiter {}
+  switch -- $kind {
+    OPEN - NESTING {
+      set delimiter $first
+      set position $second
+    }
+    LINK {
+      set delimiter [Spelling a]
+      set position $first
+    }
+    HEADING {
+      set position $first
+      regexp -start $position {\A#+} $text delimiter
+    }
+    default {
+      return $text
+    }
+  }
+  if {$kind eq "NESTING" && [string index $text $position] eq "\n"} {
+    if {[catch {parse [string range $text 0 $position-1]} - options]} {
+      return [Literal $text [dict get $options -errorcode]]
+    }
+    return $text
+  }
+  set last [expr {$position + [string length $delimiter] - 1}]
+  if {$delimiter eq {} || [string range $text $position $last] ne $delimiter} {
+    return $text
+  }
+  set literal {}
+  foreach char [split $delimiter {}] {
+    if {$char in $escapable} {
+      append literal "\\"
+    }
+    append literal $char
+  }
+  return [string replace $text $position $last $literal]
+}
+
+# A string the strict reading refuses, made one it takes; see the comment
+# above. Answers {text <the string> faults <the codes removed, in order>}.
+proc ::tclpdf::markdown::repair {text} {
+  return [::tclpdf::markup::repairWith $text MARKDOWN \
+      ::tclpdf::markdown::parse ::tclpdf::markdown::Literal]
+}
+
+package provide tclpdf::markdown 1.2

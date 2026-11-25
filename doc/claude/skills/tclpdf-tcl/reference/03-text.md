@@ -147,6 +147,19 @@ foreach {label script} [list \
     }
 }
 
+# Text typed by people - a form field, a remark - is refused as a whole for
+# one stray "**" or a "[1]". [::tclpdf::markdown::repair] writes each refused
+# place as text (with a backslash, so "**" stays "**") and answers
+# {text <string> faults <the codes it removed>}; the rest stays formatted,
+# and the string is then set the strict way. ::tclpdf::markup::repair does
+# the same for tags, writing a refused "<" as &lt;.
+package require tclpdf::markdown
+set repair [::tclpdf::markdown::repair {Ring **before noon, gate code [4711], ask for *Ms Example*.}]
+puts "repaired: [dict get $repair text]"
+puts "written as text: [dict get $repair faults]"
+set y [$doc text [dict get $repair text] -at [list 20 [expr {$y + 6}]] -width 80 \
+    -anchor top -markup markdown -family helvetica]
+
 # textLines and textHeight take -markup and -runs as well, and every line comes
 # back as a list of {text options} pairs - drawable again with -runs 1. ** is
 # <strong>, not <b>: set alike, told apart only in a tagged document.

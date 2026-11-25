@@ -2317,7 +2317,7 @@ test table-27.7 {what a cell of runs is refused for, each by name} -body {
   }
   $doc destroy
   set codes
-} -result {{TCLPDF TABLE CELL runs} {TCLPDF TABLE CELL runs} {TCLPDF TABLE CELL runs} {TCLPDF TABLE CELL markup} {TCLPDF TABLE CELL markup} {TCLPDF TABLE CELL markup} {TCLPDF TABLE STYLE markup} {TCLPDF TABLE CELL decimal} {TCLPDF TEXT RUNS DIRECTION rtl} {TCLPDF TABLE CELL paragraph heading} {TCLPDF TABLE CELL decimal} {TCLPDF TEXT RUNS DIRECTION rtl} {TCLPDF TABLE CELL paragraph heading} {TCLPDF TABLE CELL paragraph heading} {TCLPDF TEXT MARKUP OPEN li} {TCLPDF TEXT MARKDOWN OPEN ** 2} {TCLPDF TEXT MARKUP OPEN b}}
+} -result {{TCLPDF TABLE CELL runs} {TCLPDF TABLE CELL runs} {TCLPDF TABLE CELL runs} {TCLPDF TABLE CELL markup} {TCLPDF TABLE CELL markup} {TCLPDF TABLE CELL markup} {TCLPDF TABLE STYLE markup} {TCLPDF TABLE CELL decimal} {TCLPDF TEXT RUNS DIRECTION rtl} {TCLPDF TABLE CELL paragraph heading} {TCLPDF TABLE CELL decimal} {TCLPDF TEXT RUNS DIRECTION rtl} {TCLPDF TABLE CELL paragraph heading} {TCLPDF TABLE CELL paragraph heading} {TCLPDF TEXT MARKUP OPEN li 4} {TCLPDF TEXT MARKDOWN OPEN ** 2} {TCLPDF TEXT MARKUP OPEN b 2}}
 
 test table-27.8 {a refused cell of runs draws nothing - the refusal comes before the first cell} -body {
   # Measured at the layout, before anything is drawn: a decimal cell of

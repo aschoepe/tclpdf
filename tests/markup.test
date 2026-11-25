@@ -3,7 +3,8 @@
 # The tag notation of a paragraph (markup.tcl): one string in, the list of
 # {text options} pairs out that [text -runs 1] sets. The parser knows no
 # document, so these tests need none - what they check is the vocabulary,
-# the one escape, the nesting rules and every refusal by name.
+# the one escape, the nesting rules and every refusal by name - and the
+# repair that writes a refused tag as text.
 #
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
@@ -14,6 +15,7 @@ package require tcltest 2.2
 namespace import -force tcltest::*
 package require tclpdf
 package require tclpdf::markup
+source [file join [file dirname [info script]] helper.tcl]
 
 set P ::tclpdf::markup::parse
 
@@ -179,11 +181,95 @@ test markup-5.9 {every list fault is refused with its code, the tag at fault and
     lappend codes [lrange [dict get $opts -errorcode] 2 end]
   }
   set codes
-} -result {{MARKUP NESTING li 4} {MARKUP NESTING li 14} {MARKUP NESTING li 15} {MARKUP NESTING b 4} {MARKUP NESTING p 4} {MARKUP NESTING ul 4} {MARKUP NESTING li 0} {MARKUP NESTING li 3} {MARKUP NESTING li 3} {MARKUP NESTING ul 3} {MARKUP NESTING ol 4} {MARKUP NESTING ol 8} {MARKUP NESTING p 8} {MARKUP NESTING h2 8} {MARKUP NESTING li 9} {MARKUP NESTING ul 9} {MARKUP NESTING ol 14} {MARKUP OPEN ul} {MARKUP OPEN li}}
+} -result {{MARKUP NESTING li 4} {MARKUP NESTING li 14} {MARKUP NESTING li 15} {MARKUP NESTING b 4} {MARKUP NESTING p 4} {MARKUP NESTING ul 4} {MARKUP NESTING li 0} {MARKUP NESTING li 3} {MARKUP NESTING li 3} {MARKUP NESTING ul 3} {MARKUP NESTING ol 4} {MARKUP NESTING ol 8} {MARKUP NESTING p 8} {MARKUP NESTING h2 8} {MARKUP NESTING li 9} {MARKUP NESTING ul 9} {MARKUP NESTING ol 14} {MARKUP OPEN ul 0} {MARKUP OPEN li 4}}
 
 test markup-5.10 {a refusal inside a list says what a list holds} -body {
   catch {$P {<ul>x</ul>}} msg
   list [regexp {position 4} $msg] [regexp {nothing but <li>} $msg]
 } -result {1 1}
+
+# --- repair: the refused tags written as text ----------------------------------
+#
+# [repair] is for strings typed by people: every tag [parse] refuses gets
+# its "<" written &lt;, the rest stays formatted, and the codes it removed
+# come back in order. Text directly inside a list and a line feed inside an
+# item cannot be made right by an escape and stay refusals.
+
+set R ::tclpdf::markup::repair
+
+test markup-6.1 {an open tag names where it was opened} -body {
+  list [::tclpdfTest::refusal {$P {Preis <b>fett}}] [::tclpdfTest::refusal {$P {<i>a <b>b</b>}}]
+} -result {{TCLPDF TEXT MARKUP OPEN b 6} {TCLPDF TEXT MARKUP OPEN i 0}}
+
+# Each case: the string, the string repaired, the codes removed.
+set repairCases [list \
+    {Preis <b>fett ohne Schluss, aber <i>kursiv</i> geht} \
+    {Preis &lt;b>fett ohne Schluss, aber <i>kursiv</i> geht} \
+    {{TCLPDF TEXT MARKUP OPEN b 6}} \
+    {a < b und <x>y</x>} \
+    {a < b und &lt;x>y&lt;/x>} \
+    {{TCLPDF TEXT MARKUP UNKNOWN x 10} {TCLPDF TEXT MARKUP UNKNOWN x 17}} \
+    {<b>a <i>b</b> c</i>} \
+    {&lt;b>a <i>b&lt;/b> c</i>} \
+    {{TCLPDF TEXT MARKUP NESTING b 9} {TCLPDF TEXT MARKUP OPEN b 0}} \
+    {<a>kein Ziel</a> und <b>fett</b>} \
+    {&lt;a>kein Ziel&lt;/a> und <b>fett</b>} \
+    {{TCLPDF TEXT MARKUP HREF 0} {TCLPDF TEXT MARKUP NESTING a 15}} \
+    {<b class="x">a</b> <i>b</i>} \
+    {&lt;b class="x">a&lt;/b> <i>b</i>} \
+    {{TCLPDF TEXT MARKUP ATTRIBUTE b 0} {TCLPDF TEXT MARKUP NESTING b 17}} \
+    {<li>a</li> <b>b</b>} \
+    {&lt;li>a&lt;/li> <b>b</b>} \
+    {{TCLPDF TEXT MARKUP NESTING li 0} {TCLPDF TEXT MARKUP NESTING li 8}} \
+]
+
+test markup-6.2 {repair writes every refused tag as text and names the codes it removed, in order} -body {
+  set out {}
+  foreach {text repaired faults} $repairCases {
+    set answer [$R $text]
+    lappend out [expr {[dict get $answer text] eq $repaired}] \
+        [expr {[dict get $answer faults] eq $faults}]
+  }
+  set out
+} -result {1 1 1 1 1 1 1 1 1 1 1 1}
+
+test markup-6.3 {the repaired string is taken by the strict reading: one place text, the rest formatted} -body {
+  lmap {text repaired faults} $repairCases {
+    $P [dict get [$R $text] text]
+  }
+} -result {{{Preis <b>fett ohne Schluss, aber } {} kursiv {style italic} { geht} {}} {{a < b und <x>y</x>} {}} {{<b>a } {} {b</b> c} {style italic}} {{<a>kein Ziel</a> und } {} fett {style bold}} {{<b class="x">a</b> } {} b {style italic}} {{<li>a</li> } {} b {style bold}}}
+
+test markup-6.4 {a string without a fault, a string of digits and an escape already written come back unchanged} -body {
+  lmap text {{Der <b>Betrag</b> ist <a href="https://x.y">hier</a>} {} 0123 {a < b} {&lt;b> ist kein Tag}} {
+    expr {[$R $text] eq [dict create text $text faults {}]}
+  }
+} -result {1 1 1 1 1}
+
+test markup-6.5 {an escape already written is not escaped again, and digits beside a refusal stay as typed} -body {
+  list [$R {&lt;b> <b>x}] [$R {<b>0123}]
+} -result {{text {&lt;b> &lt;b>x} faults {{TCLPDF TEXT MARKUP OPEN b 7}}} {text {&lt;b>0123} faults {{TCLPDF TEXT MARKUP OPEN b 0}}}}
+
+test markup-6.6 {text directly inside a list and a line feed inside an item are no escape's to make right: refused} -body {
+  list [::tclpdfTest::refusal {$R {<ul>x<li>a</li></ul>}}] \
+      [::tclpdfTest::refusal {$R "<ul><li>a\nb</li></ul>"}] \
+      [::tclpdfTest::refusal {$R {<ul><b>a</b></ul>}}]
+} -result {{TCLPDF TEXT MARKUP NESTING li 4} {TCLPDF TEXT MARKUP NESTING li 9} {TCLPDF TEXT MARKUP NESTING li 4}}
+
+test markup-6.7 {a repair that does not end is refused after one round per character, not looped} -setup {
+  rename ::tclpdf::markup::Literal ::tclpdf::markup::LiteralSaved
+  # A repair that changes the string without touching the refused tag.
+  proc ::tclpdf::markup::Literal {text code} {
+    return "$text "
+  }
+} -body {
+  ::tclpdfTest::refusal {$R <b>x}
+} -cleanup {
+  rename ::tclpdf::markup::Literal {}
+  rename ::tclpdf::markup::LiteralSaved ::tclpdf::markup::Literal
+} -result {TCLPDF TEXT MARKUP REPAIR 4}
+
+test markup-6.8 {repair is exported beside parse and needs no document} -body {
+  lsort [namespace eval ::tclpdf::markup {namespace export}]
+} -result {parse repair}
 
 cleanupTests
