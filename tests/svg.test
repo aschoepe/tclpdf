@@ -1342,6 +1342,68 @@ test svg-defs-20.5 {and what the package can draw is not counted as a loss} -bod
   list [dict exists $skipped g] [dict exists $skipped rect] [dict size $skipped]
 } -result {0 0 0}
 
+# A <style> block under <defs>, added on 2026-11-25. The element switch
+# counted a <style> block since 2026-08-27, but a block under <defs> went
+# through [SvgCountOnly], which passes over everything in the drawable list -
+# and <style> is in it. The official ZUGFeRD logo, an Illustrator export with
+# its classes in <defs><style>, came out a black rectangle with an empty
+# [svg info]; 38 of the 49 <style> blocks on this machine stand there.
+
+test svg-defs-20.6 {a <style> block under defs is counted as style} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">
+      <defs><style>.cls-1{fill:#0086b3}</style></defs>
+      <rect class="cls-1" width="9" height="9"/>
+    </svg>} -at {10 10} -width 50
+  set skipped [$doc svg info]
+  $doc destroy
+  set skipped
+} -result {style 1}
+
+test svg-defs-20.7 {an empty <style> under defs loses nothing and is not counted} -body {
+  # The mutation reference for 20.6: what is counted is CSS that is not
+  # built, not the element. White space alone is no CSS either.
+  set answer {}
+  foreach block {<style/> {<style>  </style>}} {
+    set doc [tclpdf new]
+    $doc page add
+    $doc svg -data "<svg viewBox=\"0 0 10 10\"
+        xmlns=\"http://www.w3.org/2000/svg\"><defs>$block</defs>
+        <rect width=\"9\" height=\"9\"/></svg>" -at {10 10} -width 50
+    lappend answer [$doc svg info]
+    $doc destroy
+  }
+  set answer
+} -result {{} {}}
+
+test svg-defs-20.8 {a <style> block outside defs is still counted once} -body {
+  set doc [tclpdf new]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">
+      <style>.cls-1{fill:#0086b3}</style>
+      <rect class="cls-1" width="9" height="9"/>
+    </svg>} -at {10 10} -width 50
+  set skipped [$doc svg info]
+  $doc destroy
+  set skipped
+} -result {style 1}
+
+test svg-defs-20.9 {one block in defs and one outside are counted as two} -body {
+  # [svg info] counts per block - two blocks outside <defs> answer "style 2"
+  # as well - so the two roads add up rather than one hiding the other.
+  set doc [tclpdf new]
+  $doc page add
+  $doc svg -data {<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">
+      <defs><style>.a{fill:red}</style></defs>
+      <style>.b{fill:blue}</style>
+      <rect class="a" width="9" height="9"/>
+    </svg>} -at {10 10} -width 50
+  set skipped [$doc svg info]
+  $doc destroy
+  set skipped
+} -result {style 2}
+
 # -fit for a drawing, built on 2026-08-24. A drawing already fitted itself
 # into the rectangle it was given - "xMidYMid meet", the default of
 # preserveAspectRatio, which is why -align and -valign default to center and

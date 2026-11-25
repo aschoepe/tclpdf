@@ -1,5 +1,5 @@
-C Refresh\spkgIndex.tcl\sbefore\sall\sand\sinstall\n\n-\sMakefile.in:\sall\sand\sinstall\sdepend\son\spkgIndex.tcl,\sso\sa\sversion\sbump\swith\sconfig.status\s--recheck\sno\slonger\sinstalls\sthe\sprevious\sindex\sinto\sthe\snew\sdirectory\n-\stests:\srelease-3.1\sinstalls\sinto\sa\sscratch\sdirectory\sover\sa\sstale\sindex
-D 2026-11-25T10:03:59.097
+C Report\sa\sstyle\sblock\sunder\sdefs\sas\san\somission\n\n-\ssvgElement:\sa\sstyle\sblock\swith\scontent\sis\scounted\sas\sstyle\swherever\sit\sstands,\sthrough\sone\smethod\sSvgStyleBlock\sused\sby\sthe\selement\sswitch\sand\sby\sthe\sdefs\stally\n-\stests:\ssvg-defs-20.6\sto\s20.9\n-\ssvgElement\s1.9
+D 2026-11-25T10:09:25.911
 F Makefile.in 0cd9a281fb6eed3403962cd07330196db2d1a5b8403ca33a721fd89c397c2b0b
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
@@ -365,7 +365,7 @@ F pattern.tcl ff3122343995d0403d5227c27f2f6533a3aae71e4a3a4b36cd73624efd3643d9
 F pdfFunction.tcl db7bc175846afc7d36aa2663151c5d66e0fe8ccc01d6e966064e33917414d70d
 F pdfObj.tcl 043bc27cab0378c863bafe382cbb81dbbc4c979ea7a5575b0c7321e679f5c124
 F pdfa.tcl 9017916033a88a1edceacbabf21ab9c95d1493459014c2961d8cf844e76770e1
-F pkgIndex.tcl.in 2276c078836c7b6490c39ee20850558488d5e27540ba26de745186a5a38b475c
+F pkgIndex.tcl.in d310a3ebd4fe610f8e6c3bf9fe16c85f875e29fc3c243cf4025e7c44141e2367
 F sbix.tcl 79af5fd7e5d26953f740b2477893c42cc8beb98ebc5b9aa71396f69fb835480c
 F sfnt.tcl db90e51ff1f67ea6a0f1fdfce2516ed338488963f7973d9bbcd1e8ad19dee7f8
 F shading.tcl aad03244e4cfd880e55f6e806ad98ef174baadaa0eacc9ac0f024b2c3d8fd22d
@@ -380,7 +380,7 @@ F structureWrite.tcl d22f84a93a66372d829ee232d3046dbb193af4dd1d9d95b86e676a64222
 F subset.tcl f16f0f1dd1b6337e2ba306964c30a715ed7623b536c3ca4b11f02e4e44bbb747
 F svg.tcl b53285f2585855529996eab0e5ace2afb7438fd5e636bbf8b5e3a02954d54bba
 F svgClip.tcl ebd4c96cc1ed12b3b91e87952398391e84f2a3d5c8acbe6821f641b732091e4f
-F svgElement.tcl 4186d24366a2de697515640ceca83ed01debd1dadba03096ba5018bb78a2f941
+F svgElement.tcl 01f2d1634dc4643fec5653781852b17166269e6401d133cec837c1e5afaa8d7e
 F svgPaint.tcl 616fe388b723a3a8ac183da4b849969c60e8c9ac9f202ca97d97ec0180b83c01
 F svgPath.tcl 8309e51fcf5b5fe54d501f6f4822bf24d68798f854d059f7aab2f52688fb82ff
 F table.tcl 3a3c2e9f596e7f9995d8bbbae717529384508bb958fbc3248c37718d34fab2c8
@@ -468,7 +468,7 @@ F tests/shaping.test 2782df5ad77b4d09adaa5ce270cb511b84b2f42702daed2e31517f4e845
 F tests/sign.test 8be70999a5229cd06a4f52853465d35bb4554c26e7777651c498a84eacbdcd48
 F tests/structure.test d7467020023eecec7f821f3bf337161ef8ba592a93a98a07cc3094dfad2fa70a
 F tests/subset.test c7dde96f5d7cc81fdf992519335c2e6cb9059e0d1cad867fac7583e27226721b
-F tests/svg.test 0166436380401ab8213044659376d46c43d85510a993d20f49ae2a70b1d6660c
+F tests/svg.test 98e0e3811f8bca5618d035c451bc449fb57927dc46e418b6e0ebcda83f2007df
 F tests/svgClip.test 9b371c204d320710241d043ee4b6507f7b4009de2d6185087516376f2a88dfc5
 F tests/table.test 191ed38722067c37bcce0862722d6360da693ce9852b11b28c5248e8c1ec8c41
 F tests/text.test 48a08bbc690c666ba1f676caecfcec366c20af891a0c0f8be44e022a75498e0b
@@ -523,8 +523,8 @@ F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
 F xml.tcl 3abe87e2da0b29d2443e9e46a25284923cee6bd19b0b059f23e5da47bb816596
 F xmp.tcl 1fe4b3a7d45f98c270230cdac79d08fef4f3bec3bc9ca32c5032a709ebe092d5
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 69b79b8507204c7a95b80cad3d7f1894e1b05df11d1206e302397ebcaac115c8
-R ec22558b2b9a264e1cf048d6bb30da4e
+P 9def33ad9609fc0ec14a80f6b78cd623e6da17bd557c6cd6c65ed5cb3ad1dd32
+R fb6d48fb55cc5e03126b25919e6a4d37
 U alex
-Z 713fd577ffcd43ba2e1e28145a7274cf
+Z e265b70a36d969f735187d1e75ce0c5b
 # Remove this line to create a well-formed Fossil manifest.

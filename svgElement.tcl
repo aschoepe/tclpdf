@@ -147,8 +147,15 @@ oo::define ::tclpdf::document::document {
         # colour and [svg info] was empty (measured 2026-08-27: black instead
         # of green, without a word). CSS in a <style> block is not built;
         # that it is not built is now visible.
-        if {$name eq "style" && [string trim [::tclpdf::xml text $node]] ne {}} {
-          my SvgSkipped style
+        #
+        # It was visible only HERE until 2026-11-25: a block inside <defs>
+        # went through [SvgCountOnly], which passes over the drawable list,
+        # and was again not counted - measured on the official ZUGFeRD logo,
+        # an Illustrator export that keeps its classes in <defs><style>, as
+        # are 38 of the 49 <style> blocks on this machine: a black rectangle
+        # and an empty [svg info]. Both places ask [SvgStyleBlock] now.
+        if {$name eq "style"} {
+          my SvgStyleBlock $node
         }
       }
       use {
@@ -432,11 +439,28 @@ oo::define ::tclpdf::document::document {
       # entries that matter under the shapes they are made of - measured on a
       # real logo, "filter 2 mask 1" came with "g 3 path 1" beside it and read
       # as if four different things had gone wrong.
-      if {$name ni $::tclpdf::svgElement::drawable} {
+      #
+      # The one exception is <style>: it is in the drawable list because the
+      # element switch has a case for it, but its CSS is drawn nowhere, so
+      # under <defs> it is the same omission it is anywhere else.
+      if {$name eq "style"} {
+        my SvgStyleBlock $child
+      } elseif {$name ni $::tclpdf::svgElement::drawable} {
         my SvgSkipped $name
       }
       my SvgCountOnly $child
     }
+  }
+
+  # A <style> block with any CSS in it is counted as the omission "style";
+  # an empty one loses nothing and is not. ONE test for the two places that
+  # meet the element - the element switch and [SvgCountOnly] - because the
+  # second of them not asking it was the defect of 2026-11-25.
+  method SvgStyleBlock {node} {
+    if {[string trim [::tclpdf::xml text $node]] ne {}} {
+      my SvgSkipped style
+    }
+    return
   }
 
   method SvgGroupWanted {style} {
@@ -1200,4 +1224,4 @@ oo::define ::tclpdf::document::document {
   # operators are the only description of the shape available here.
 }
 
-package provide tclpdf::svgElement 1.8
+package provide tclpdf::svgElement 1.9
