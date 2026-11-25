@@ -32,22 +32,27 @@ package require tclpdf::pdfObj 1.0-
 package require tclpdf::option 1.4-
 package require tclpdf::geometry 1.0-
 package require tclpdf::document 1.0-
-package require tclpdf::text 1.0-
+# 1.28 for [TextAnchor] with a direction: -anchor is checked at the call.
+package require tclpdf::text 1.28-
 
 namespace eval ::tclpdf::pageNumber {}
 
 oo::define ::tclpdf::document::document {
 
   # $doc pageNumbers -at {x y} ?-format "Page %n of %m"? ?-align center?
-  #                  ?-from 2? ?-total 7? ?font options?
+  #                  ?-anchor top? ?-from 2? ?-total 7? ?font options?
   #
   # %n is the page number, %m the total. -from skips the leading pages, which
   # is how a title page stays unnumbered; the count itself still includes them
   # unless -total says otherwise, because "Page 2 of 7" on the second sheet of
-  # seven is what a reader expects.
+  # seven is what a reader expects. -anchor is [text]'s: where the y of -at
+  # lands on the line, so a number can share the top or bottom edge of a
+  # footer set with [text -anchor] instead of its baseline being worked out
+  # by hand.
   method pageNumbers {args} {
     my TextInit
-    set defaults {at {} format "Page %n of %m" align left from 1 total {}}
+    set defaults {at {} format "Page %n of %m" align left anchor baseline
+        from 1 total {}}
     foreach name $::tclpdf::text::stateOptions {
       dict set defaults $name [my TextGet $name]
     }
@@ -92,6 +97,11 @@ oo::define ::tclpdf::document::document {
           "tclpdf: -align must be left, right or center,\
           not \"[dict get $options align]\""
     }
+    # -anchor through the same check as [text], with the direction of the
+    # line: the number is drawn at write time, and a value refused only there
+    # would name [write] rather than this call - "-anchor top" on a vertical
+    # number included, which [text] refuses for any vertical line.
+    my TextAnchor [dict get $options anchor] [dict get $options direction]
     # A page number is ONE line: it is drawn with [text] and no -width, and
     # [text] refuses a line feed there by name (TCLPDF TEXT LINEFEED). Asked
     # here for the same reason -at is: the label is built and drawn at write
@@ -171,7 +181,7 @@ oo::define ::tclpdf::document::document {
         lappend arguments -$name [dict get $run $name]
       }
       my text $label -at [dict get $run at] -align [dict get $run align] \
-          {*}$arguments
+          -anchor [dict get $run anchor] {*}$arguments
     } result info]
     set content [my canvas pop]
     my state structureSuspend $suspended
@@ -211,7 +221,9 @@ oo::define ::tclpdf::document::document {
         # number sits: above the middle of the page it is a running head,
         # below it a running foot. This is the one place that KNOWS - a
         # caller writing their own header has to say so with
-        # "-tag {Artifact Pagination Header}".
+        # "-tag {Artifact Pagination Header}". Read from the y of -at alone:
+        # -anchor moves the line by a fraction of its own height around that
+        # point, not across the middle of a page.
         lassign [dict get $run at] . top
         lassign [my page size $page] . pageHeight
         set subtype [expr {$top * 2 < $pageHeight ? "Header" : "Footer"}]
@@ -227,4 +239,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::pageNumber 1.8
+package provide tclpdf::pageNumber 1.9

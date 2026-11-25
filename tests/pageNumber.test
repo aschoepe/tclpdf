@@ -376,4 +376,170 @@ test pageNumber-r8-1.2 {a format with a line feed is refused at the call} -body 
   list $code $plain $written
 } -result {{TCLPDF PAGENUMBER ARGUMENT format} 0 {0 1}}
 
+# --- -anchor, as [text] takes it ----------------------------------------------
+#
+# Until 2026-11-25 the number always sat on its baseline: "-anchor top" was an
+# unknown option, and a footer whose other parts were set with -anchor top or
+# bottom had to work out the baseline of the number by hand from the size and
+# the metrics of the face.
+
+namespace eval ::pageNumberTest {}
+
+# The content of the form a pageNumbers call draws its number into, and the
+# page content of a [text] call with the same label and options on a page of
+# its own - two documents, so that neither sees the other. {form text}; the
+# two have to be the same bytes, because the number IS drawn with [text].
+proc ::pageNumberTest::pair {label options {face {}}} {
+  set streams {}
+  foreach road {pageNumbers text} {
+    set doc [tclpdf new -unit mm -compress 0]
+    if {$face ne {}} {
+      $doc font embed face $face
+    }
+    $doc page add
+    if {$road eq "pageNumbers"} {
+      $doc pageNumbers -format $label {*}$options
+      set path [::tclpdfTest::scratch pageNumber-anchor-[pid].pdf]
+      $doc write $path
+      file delete $path
+      set form [lindex [::tclpdfTest::objects $doc "/Subtype /Form"] 0]
+      regexp {stream\n(.*)\nendstream} $form -> stream
+      lappend streams $stream
+    } else {
+      $doc text $label {*}$options
+      lappend streams [::tclpdfTest::content $doc 0]
+    }
+    $doc destroy
+  }
+  return $streams
+}
+
+# The y of the first Td in a stream, in points as written.
+proc ::pageNumberTest::y {stream} {
+  regexp {[-0-9.]+ ([-0-9.]+) Td} $stream -> y
+  return $y
+}
+
+test pageNumber-9.1 {-anchor draws the number as [text -anchor] draws the line} -body {
+  # The strongest form of "the same meaning as [text]": byte for byte the
+  # content of a [text] call given the same label, position and options.
+  set result {}
+  foreach anchor {baseline top middle bottom} {
+    lassign [::pageNumberTest::pair "Page 1 of 1" [list -at {105 285} \
+        -align center -family times -size 8 -anchor $anchor]] form text
+    lappend result $anchor [expr {$form eq $text ? "same" : "differ"}]
+  }
+  set result
+} -result {baseline same top same middle same bottom same}
+
+test pageNumber-9.2 {-anchor with an embedded face takes that face's metrics} \
+    -constraints haveNumberFace -body {
+  # The other road through [TextLift]: ascender and descender read from the
+  # font file rather than from an AFM.
+  set result {}
+  foreach anchor {top middle bottom} {
+    lassign [::pageNumberTest::pair "Seite 1 von 1" [list -at {190 12} \
+        -align right -family face -size 9 -anchor $anchor] $::numberFace] \
+        form text
+    lappend result $anchor [expr {$form eq $text ? "same" : "differ"}]
+  }
+  set result
+} -result {top same middle same bottom same}
+
+test pageNumber-9.3 {-anchor top sets the number one ascent lower, bottom one descent higher} -body {
+  # Measured against the metrics rather than against [text], so that the
+  # meaning is checked as well as the agreement: Times-Roman at 8 pt, its
+  # Ascender and Descender from the AFM, PDF y counting upwards.
+  set descriptor [::tclpdf::afm descriptor Times-Roman]
+  set ascent [expr {[dict get $descriptor Ascender] * 8 / 1000.0}]
+  set descent [expr {abs([dict get $descriptor Descender]) * 8 / 1000.0}]
+  foreach anchor {baseline top middle bottom} {
+    lassign [::pageNumberTest::pair "1" [list -at {105 285} -family times \
+        -size 8 -anchor $anchor]] form
+    set y($anchor) [::pageNumberTest::y $form]
+  }
+  list [format %.3f [expr {$y(baseline) - $y(top)}]] [format %.3f $ascent] \
+      [format %.3f [expr {$y(bottom) - $y(baseline)}]] [format %.3f $descent] \
+      [format %.3f [expr {$y(baseline) - $y(middle)}]] \
+      [format %.3f [expr {($ascent - $descent) / 2.0}]]
+} -result {5.464 5.464 1.736 1.736 1.864 1.864} -cleanup {
+  unset -nocomplain y
+}
+
+test pageNumber-9.4 {a wrong -anchor is refused at the call, with the code [text] uses} -body {
+  # The number is drawn at write time; refused only there, the error would
+  # name [write] - and every run before it would already have been placed.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  set codes {}
+  foreach value {junk Top {}} {
+    lappend codes [::tclpdfTest::refusalCode {
+      $doc pageNumbers -at {105 285} -anchor $value
+    }] [::tclpdfTest::refusalCode {
+      $doc text "1" -at {105 285} -anchor $value
+    }]
+  }
+  # Nothing was recorded by the refused calls: a write draws no number.
+  set path [::tclpdfTest::scratch pageNumber-anchor-refused.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  list $codes [regexp {XOPN} $bytes]
+} -result {{{TCLPDF TEXT ANCHOR junk} {TCLPDF TEXT ANCHOR junk} {TCLPDF TEXT ANCHOR Top} {TCLPDF TEXT ANCHOR Top} {TCLPDF TEXT ANCHOR {}} {TCLPDF TEXT ANCHOR {}}} 0}
+
+test pageNumber-9.5 {-anchor top on a vertical number is refused at the call, as [text] refuses it} \
+    -constraints haveNumberFace -body {
+  # A vertical line begins at y already; [text] refuses -anchor top there by
+  # name. The number is drawn at write time, so the same question is asked
+  # at the call - and -anchor bottom on the same line still goes in.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc font embed face $::numberFace
+  $doc page add
+  set codes [list [::tclpdfTest::refusalCode {
+    $doc pageNumbers -at {200 150} -family face -direction ttb -anchor top
+  }] [::tclpdfTest::refusalCode {
+    $doc text "1" -at {200 150} -family face -direction ttb -anchor top
+  }]]
+  set path [::tclpdfTest::scratch pageNumber-anchor-ttb.pdf]
+  $doc write $path
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  $doc destroy
+  list $codes [regexp {XOPN} $bytes]
+} -result {{{TCLPDF TEXT VERTICAL anchor} {TCLPDF TEXT VERTICAL anchor}} 0}
+
+test pageNumber-9.6 {without -anchor the file is the one -anchor baseline writes} -body {
+  # The default is the baseline, as it was before the option existed: an
+  # existing document keeps its bytes.
+  ::tclpdfTest::sameBytes {
+    $doc page add
+    $doc pageNumbers -at {300 820} -align center -size 8
+    $doc pageNumbers -at {20 20} -family times -from 2
+  } {
+    $doc page add
+    $doc pageNumbers -at {300 820} -align center -size 8 -anchor baseline
+    $doc pageNumbers -at {20 20} -family times -from 2 -anchor baseline
+  }
+} -result same
+
+test pageNumber-9.7 {-anchor leaves head or foot to the y of -at} -body {
+  # Under PDF/UA the subtype of the Pagination artifact comes from where -at
+  # sits on the page. -anchor moves the line by part of its own height around
+  # that point, so it must not change the answer - tried with the anchors that
+  # move the line TOWARDS the middle of the page.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc text "x" -at {20 40}
+  $doc pageNumbers -at {105 12} -align center -size 8 -format "%n" -anchor bottom
+  $doc pageNumbers -at {105 285} -align center -size 8 -format "%n" -anchor top
+  set path [::tclpdfTest::scratch pageNumber-anchor-ua.pdf]
+  $doc write $path
+  $doc destroy
+  set bytes [::tclpdfTest::readBytes $path]
+  file delete $path
+  list [regexp -all {/Subtype /Header} $bytes] [regexp -all {/Subtype /Footer} $bytes]
+} -result {1 1}
+
 cleanupTests

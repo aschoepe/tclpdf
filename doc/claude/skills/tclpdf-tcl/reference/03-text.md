@@ -322,13 +322,14 @@ Glyphs that run past the end are dropped rather than piled up - measure the stri
 ```tcl
 # The only moment the total is known is the write, so the call may come first.
 $doc font -family body -size 8 -color {0.35 0.35 0.4}
-$doc pageNumbers -at {190 287} -align right -format "page %n of %m"
-$doc pageNumbers -at {105 287} -align center -format "vol. 1" -family bodyBold -size 7
+# -anchor as in text: both hang from y = 285, an 8 pt and a 7 pt line alike.
+$doc pageNumbers -at {190 285} -anchor top -align right -format "page %n of %m"
+$doc pageNumbers -at {105 285} -anchor top -align center -format "vol. 1" -family bodyBold -size 7
 # -from leaves leading pages unnumbered, -total states a total of a larger set:
 # $doc pageNumbers -at {20 287} -from 2 -total 12 -format "sheet %n of %m"
 ```
 
-Each call is independent and takes the font options on its own. `%n` is the number, `%m` the total. Above the middle of the page it becomes a `Pagination Header` artifact, below a `Footer`. Printed numbers and page labels have to agree - see `08-navigation-metadata.md`.
+Each call is independent and takes the font options on its own. `%n` is the number, `%m` the total. `-anchor baseline|top|middle|bottom` means what it means for `text` (default `baseline`) and is checked at the call. Above the middle of the page it becomes a `Pagination Header` artifact, below a `Footer`. Printed numbers and page labels have to agree - see `08-navigation-metadata.md`.
 
 ```tcl
 $doc write [file join $out ref-03-text.pdf]

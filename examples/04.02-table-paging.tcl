@@ -116,7 +116,10 @@ set y [$doc table -at {20 38} -top 26 -bottom 272 -width 170 -theme striped \
     }}} \
     -didDrawPage {apply {{payload doc} {
         $doc font -family helvetica -style {} -size 7 -color {0.45 0.45 0.5}
-        $doc text "Herbarium index" -at {20 287}
+        # The foot hangs from the rule: -anchor top puts the top of the
+        # letters at 285, whatever the size - and the page numbers below
+        # say the same, so a 7 pt and an 8 pt line share one top edge.
+        $doc text "Herbarium index" -at {20 285} -anchor top
         $doc line -from {20 283} -to {190 283} -stroke {0.8 0.8 0.85} -width 0.2
         # A running head, but only from page two: page one has the real
         # heading, and -at puts the table below it. -top 26 keeps the
@@ -131,9 +134,11 @@ set y [$doc table -at {20 38} -top 26 -bottom 272 -width 170 -theme striped \
 # not how many pages there will be. While page three is drawn, nobody knows
 # there will be seven; the hook cannot answer it, and no amount of ordering
 # helps. [pageNumbers] states the wish and draws it at write time, when the
-# document is complete and the total is simply the page count.
+# document is complete and the total is simply the page count. -anchor means
+# what it means for [text]: the number hangs from the same edge as the foot
+# the hook draws, with no baseline worked out by hand.
 $doc font -family helvetica -style {} -size 8 -color {0.35 0.35 0.4}
-$doc pageNumbers -at {190 287} -align right -format "page %n of %m"
+$doc pageNumbers -at {190 285} -anchor top -align right -format "page %n of %m"
 
 # Several calls are independent of each other, and each takes the font options
 # on its own - a family, style, size and colour of its own rather than the
@@ -147,7 +152,7 @@ set volume [expr {[$doc page count] + 5}]
 $doc pageNumbers -at {60 20} -align left -from 2 -total $volume \
     -format "sheet %n of %m in the bound volume" \
     -family times -style italic -size 7 -color {0.45 0.45 0.5}
-$doc pageNumbers -at {105 287} -align center -format "vol. 1" \
+$doc pageNumbers -at {105 285} -anchor top -align center -format "vol. 1" \
     -family helvetica -style bold -size 7 -color {0.35 0.35 0.4}
 
 # finalY: continue below the table, on whatever page it ended on.

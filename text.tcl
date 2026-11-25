@@ -466,21 +466,9 @@ oo::define ::tclpdf::document::document {
     # the stream, the tree and the state have to look as if the call never
     # happened - so the order is: check, then mark, then draw.
     set state [my TextMerge $args]
-    # A VERTICAL line is ONE line, and -anchor says where the y of -at lands
-    # on it - baseline or one ascent higher. Both are offsets along y, and
-    # along y is where a vertical line writes: "the top of the letters at y"
-    # is what -align left already means there, so -anchor top would be either
-    # a second name for it or a second, contradicting one. Refused rather
-    # than quietly read as baseline, which is what the same option does at
-    # [TextAnchor] for a value it does not know.
-    if {[dict get $state direction] eq "ttb"
-        && [dict get $options anchor] eq "top"} {
-      return -code error -errorcode [list TCLPDF TEXT VERTICAL anchor] \
-          "tclpdf: -anchor top places the top of the letters at y, and a\
-          vertical line already begins at y - use -align left, right or\
-          center to say where -at sits on the column, and -anchor baseline\
-          (the default) here"
-    }
+    # Asked again now that the direction of the line is known - see
+    # TextAnchor for why -anchor top and a vertical line do not go together.
+    my TextAnchor [dict get $options anchor] [dict get $state direction]
     set width [dict get $options width]
     if {[dict get $options paginate] && $width eq {}} {
       return -code error -errorcode [list TCLPDF TEXT PAGINATE width] \
@@ -1290,11 +1278,28 @@ oo::define ::tclpdf::document::document {
   # says "baseline or top", and a value outside the two is refused rather
   # than read as baseline. Returns the anchor, so a caller can test it in the
   # same breath.
-  method TextAnchor {anchor} {
+  #
+  # With a direction it answers for the line as well. A VERTICAL line is ONE
+  # line, and -anchor says where the y of -at lands on it - baseline or one
+  # ascent higher. Both are offsets along y, and along y is where a vertical
+  # line writes: "the top of the letters at y" is what -align left already
+  # means there, so -anchor top would be either a second name for it or a
+  # second, contradicting one. Refused rather than quietly read as baseline.
+  # Here rather than in [text] alone because [pageNumbers] takes -anchor too
+  # and draws at write time: it asks the same question at its call, so the
+  # refusal names that call and not a [write] much later.
+  method TextAnchor {anchor {direction ltr}} {
     if {$anchor ni {baseline top middle bottom}} {
       return -code error -errorcode [list TCLPDF TEXT ANCHOR $anchor] \
           "tclpdf: -anchor must be baseline, top, middle or bottom, not\
           \"$anchor\""
+    }
+    if {$direction eq "ttb" && $anchor eq "top"} {
+      return -code error -errorcode [list TCLPDF TEXT VERTICAL anchor] \
+          "tclpdf: -anchor top places the top of the letters at y, and a\
+          vertical line already begins at y - use -align left, right or\
+          center to say where -at sits on the column, and -anchor baseline\
+          (the default) here"
     }
     return $anchor
   }
@@ -3312,4 +3317,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::text 1.27
+package provide tclpdf::text 1.28
