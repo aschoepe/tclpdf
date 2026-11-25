@@ -68,7 +68,8 @@ package require tclpdf::option 1.4-
 package require tclpdf::color 1.0-
 package require tclpdf::geometry 1.0-
 # 1.4 for -rect, -page, -size and -borderWidth read in decimal.
-package require tclpdf::field 1.4-
+# 1.5 for [FieldFaceOptions]: one face, no chain, no replacement.
+package require tclpdf::field 1.5-
 
 # Point 1 of the contract at the head of field.tcl.
 ::tclpdf::field register text tclpdf::fieldText
@@ -360,8 +361,8 @@ oo::define ::tclpdf::document::document {
     # paragraphs further down the page, and every field came out in it. The
     # appearance has to be set in the font the /DA names, and those are the
     # values [FieldFont] settled when the field was declared.
-    set font [list -size $size -family [dict get $data family] \
-        -style [dict get $data style] -color [dict get $data color]]
+    set font [list {*}[my FieldFaceOptions $size [dict get $data family] \
+        [dict get $data style]] -color [dict get $data color]]
 
     # 12.7.4.3 prescribes the shape of the stream, and the order in it is
     # not free: /Tx BMC ... q ... BT ... ET ... Q ... EMC. The mark is not
@@ -408,4 +409,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::fieldText 1.3
+package provide tclpdf::fieldText 1.4

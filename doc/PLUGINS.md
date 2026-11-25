@@ -21,6 +21,7 @@ Subscribers run in registration order. The events a document fires:
 | `catalog` | while the catalog is built | — |
 | `info` | while the info dictionary is built | — |
 | `afterWrite` | after the file is complete | the path; empty for `writeChannel` |
+| `glyphReplaced` | under `font -missing replace`, for every character drawn as a replacement | the code point as `U+XXXX`, its position in code points within the line, the list of faces that were asked |
 
 A document with no pages is refused before any of this happens: `write` raises `TCLPDF OUTPUT EMPTY pages` ahead of `beforeWrite`, so none of the five write-time events fires on an empty document. Read `beforeWrite` as "the write is going ahead", not as "a write was attempted".
 

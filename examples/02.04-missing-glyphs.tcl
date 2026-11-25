@@ -31,6 +31,18 @@
 #   face. Which is right is a question about the document; what is wrong is
 #   only the silent version of either.
 #
+#   A REPLACEMENT, asked for, is the third answer and on the same side of
+#   that line: [font -missing replace] draws -replacement (U+FFFD unless said
+#   otherwise) where no face of the chain has a glyph, and says so - every
+#   replaced character is counted for [textReplaced] and announced as a
+#   glyphReplaced event, and the original stays in the file as ActualText, so
+#   copying the line or reading it aloud gives back what was written while
+#   the page shows the mark. The replacement itself has to be settable by the
+#   chain, and that is asked when the option is written: Niconne has no
+#   U+FFFD, and the call below that forgets the chain is refused on the spot.
+#   [textMissing] asks the question beforehand, every character at once. The
+#   second page shows it.
+#
 #   The writer is the last place in the chain that still knows what was meant.
 #   So it says so, names the character and the position, and lets the caller
 #   decide - which is what the loop below does, in four lines. The same facts
@@ -184,6 +196,85 @@ foreach dish $mixed {
     set chainY [expr {$chainY + 10}]
 }
 
+# -- replaced on request -------------------------------------------------------
+#
+# Dishes with characters NO face of the chain has: Niconne and DejaVu Sans
+# carry no CJK and no Hangul. The chain keeps refusing them - until the
+# document asks for a replacement, and then it draws U+FFFD from DejaVu Sans,
+# the face of the chain that has it, and tells what it did.
+set foreign {
+    "Yakitori \u713C\u304D\u9CE5"     "7,40"
+    "Bibimbap \uBE44\uBE54\uBC25"     "9,60"
+    "Pierogi z \u0142ososiem"         "7,90"
+}
+
+$doc page add
+$doc font -family bodyBold -size 15 -fallback {} -color black
+$doc text "Replaced on request, and said so" -at {20 22}
+$doc font -family body -size 9
+set y [$doc text "A character that neither the display face nor the chain\
+    behind it can set is refused as before - unless the document asks for a\
+    replacement. Then U+FFFD is drawn where the character would stand, the\
+    original goes into the file as ActualText, and every replacement is\
+    counted and announced. Copy a line below out of the PDF and the Japanese\
+    and Korean characters come back; the page shows the mark." \
+    -at {20 29} -width 170]
+
+# Asked first: which characters will not set? One call per string, every
+# character at once, positions in code points as the refusal counts them.
+set asked {}
+foreach {dish price} $foreign {
+    lappend asked [list $dish [$doc textMissing $dish -family script \
+        -fallback body]]
+}
+
+# The replacement has to be settable by the chain, and that is checked where
+# the option is written: Niconne alone has no U+FFFD.
+try {
+    $doc font -family script -fallback {} -missing replace
+    set refusal "accepted"
+} trap {TCLPDF FONT REPLACEMENT} {reason opts} {
+    set refusal [lrange [dict get $opts -errorcode] 0 3]
+}
+
+# The bus tells a log what happened, without a question asked.
+set events {}
+$doc on glyphReplaced [list apply {{document codepoint position faces} {
+    lappend ::events "$codepoint at $position"
+}}]
+
+set y [expr {$y + 12}]
+$doc font -family script -size 14 -fallback body -missing replace
+foreach {dish price} $foreign {
+    $doc text $dish -at [list 20 $y]
+    $doc text $price -at [list 150 $y] -width 30 -align right -family body \
+        -size 11
+    set y [expr {$y + 10}]
+}
+# The state is the document's: back to refusing for everything after.
+$doc font -fallback {} -missing error
+
+$doc font -family bodyBold -size 10
+$doc text "What the document was told" -at [list 20 [expr {$y + 4}]]
+set told {}
+foreach entry $asked {
+    lassign $entry dish missing
+    if {![llength $missing]} {
+        set missing "nothing - the chain sets it"
+    }
+    # The dish by its Latin name: the table is set in DejaVu Sans, which
+    # cannot set the rest, and is not asked to replace anything.
+    lappend told [list [lindex $dish 0] "textMissing" $missing]
+}
+lappend told [list "-missing replace on Niconne alone" "refused" $refusal]
+lappend told [list "the three lines above" "textReplaced" [$doc textReplaced]]
+lappend told [list "the three lines above" "glyphReplaced" \
+    [join $events {, }]]
+$doc table -at [list 20 [expr {$y + 10}]] -width 170 -theme striped \
+    -style {family body size 8} -headStyle {family bodyBold size 8} \
+    -head {{Asked Through Answer}} -body $told \
+    -columns {{width 52} {width 28} {}}
+
 exampleFooter $doc body
 
 $doc write $target
@@ -195,4 +286,6 @@ foreach entry $record {
 puts "  [llength $record] dishes, $fallback needed the text face"
 puts "  the same [llength $mixed] set again with -fallback: the display face\
     keeps every letter it has"
+puts "  [llength $events] characters replaced on request, each one told:\
+    [join $events {, }]"
 $doc destroy

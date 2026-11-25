@@ -40,7 +40,9 @@ package require TclOO
 package require tclpdf::pdfObj 1.0-
 package require tclpdf::afm 1.0-
 package require tclpdf::option 1.4-
-package require tclpdf::text 1.27-
+# 1.28 for [textMissing], which asks whether the break hyphen is settable
+# under -missing replace.
+package require tclpdf::text 1.28-
 
 namespace eval ::tclpdf::textBlock {
   # The options of a block, with their defaults - the same list [text] takes,
@@ -880,6 +882,9 @@ oo::define ::tclpdf::document::document {
             $string $wordFrom] && [llength $units] > 1} {
           set take [llength $units]
           set mark [expr {$emergency ? "-" : ""}]
+          if {$emergency} {
+            my TextBlockHyphenSettable $arguments
+          }
           while {$take > 1 && [my TextBlockMeasure \
               "[join [lrange $units 0 $take-1] {}]$mark" \
               $arguments $string $wordFrom] > $width} {
@@ -972,15 +977,55 @@ oo::define ::tclpdf::document::document {
         # "the font \"emo\" has no glyph for U+002D (position 4)" over a text
         # of four emoji, naming a character nobody wrote at a position that
         # meant nothing. Said as what it is instead.
-        return -code error -errorcode [list TCLPDF TEXT BREAKHYPHEN glyph] \
-            "tclpdf: a word had to be broken inside, and the break is marked\
-            with a hyphen (U+002D) that the face this block is set in has no\
-            glyph for - the hyphen is the line breaker's, not the text's, so\
-            there is no position in the string to name; set the block in a\
-            face that has a hyphen, or give -emergencyHyphen 0 and\
-            -hyphenate 0 and break the words yourself"
+        my TextBlockHyphenRefusal
       }
       my TextBlockRebase $message $options $position
+    }
+  }
+
+  # The refusal of a break hyphen the face cannot set - from the trap above,
+  # and from [TextBlockHyphenSettable] below, which asks the same question
+  # where a replacement would otherwise have answered it.
+  method TextBlockHyphenRefusal {} {
+    return -code error -errorcode [list TCLPDF TEXT BREAKHYPHEN glyph] \
+        "tclpdf: a word had to be broken inside, and the break is marked\
+        with a hyphen (U+002D) that the face this block is set in has no\
+        glyph for - the hyphen is the line breaker's, not the text's, so\
+        there is no position in the string to name; set the block in a\
+        face that has a hyphen, or give -emergencyHyphen 0 and\
+        -hyphenate 0 and break the words yourself"
+  }
+
+  # Can the break hyphen be set - asked UNDER -missing replace only, right
+  # before the breaker hangs one on a piece of a word.
+  #
+  # A REPLACEMENT IS FOR THE CHARACTERS OF THE TEXT, NOT FOR WHAT THIS PACKAGE
+  # PUTS IN. The hyphen at a break is the breaker's (see the trap in
+  # [TextBlockMeasure]): measured under -missing replace before 2026-11-25, a
+  # face without U+002D had its break hyphens drawn as the replacement,
+  # counted by [textReplaced] as a character of the text nobody wrote, and
+  # wrapped in an ActualText span inside the empty one that marks the break.
+  # Without the replacement the measurement refuses on its own and the trap
+  # names it; with it nothing refuses, so the question is asked here, in the
+  # words of the trap, and the replacement never sees the hyphen. TextRun in
+  # text.tcl draws the hyphen with the replacement turned off, for the same
+  # reason.
+  #
+  # The option is read off the arguments rather than out of a merged state:
+  # this runs at every offer of a break, and a block that never asked for a
+  # replacement must not pay a [TextMerge] for it.
+  method TextBlockHyphenSettable {arguments} {
+    set missing [my TextGet missing]
+    foreach {name value} $arguments {
+      if {$name eq "-missing"} {
+        set missing $value
+      }
+    }
+    if {$missing ne "replace"} {
+      return
+    }
+    if {[llength [my textMissing - {*}$arguments]]} {
+      my TextBlockHyphenRefusal
     }
   }
 
@@ -1124,6 +1169,7 @@ oo::define ::tclpdf::document::document {
     if {[llength $parts] < 2} {
       return {}
     }
+    my TextBlockHyphenSettable $arguments
     # From the last offer backwards - the line is to be filled, not emptied.
     for {set take [expr {[llength $parts] - 1}]} {$take >= 1} {incr take -1} {
       set head [join [lrange $parts 0 [expr {$take - 1}]] {}]-
@@ -2311,4 +2357,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::textBlock 1.22
+package provide tclpdf::textBlock 1.23

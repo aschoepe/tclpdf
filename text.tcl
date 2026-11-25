@@ -24,13 +24,15 @@ package require tclpdf::pdfObj 1.9-
 package require tclpdf::afm 1.0-
 package require tclpdf::option 1.4-
 package require tclpdf::color 1.0-
-package require tclpdf::document 1.0-
+# 1.18 for the topic table that names textMissing.tcl, which -missing replace
+# and -replacement load through it.
+package require tclpdf::document 1.18-
 
 namespace eval ::tclpdf::text {
   # Which options describe the font state rather than one call.
   variable stateOptions {family style size color spacing wordSpacing
       stretch leading rise kerning ligatures unshaped render stroke
-      strokeWidth fallback}
+      strokeWidth fallback missing replacement}
 
   # The text rendering mode (ISO 32000-2, 9.3.6, "Text rendering mode",
   # Table 104 - Table 106 in ISO 32000-1) by the word a caller writes for it.
@@ -226,7 +228,11 @@ oo::define ::tclpdf::document::document {
   #   -ligatures   apply the standard ligatures of an embedded font, 0 or 1
   #   -fallback    the faces that may set what -family cannot, in order -
   #                see "the fallback chain" below
-  #   -render      how the glyphs are painted (9.3.6): fill, stroke,
+  #   -missing     error (the default) or replace: what happens to a
+  #                character no face of the chain has - textMissing.tcl
+  #   -replacement the character drawn in its place under -missing replace,
+  #                U+FFFD by default; the chain has to be able to set it
+  #   -render     how the glyphs are painted (9.3.6): fill, stroke,
   #                fillStroke or invisible
   #   -stroke      the outline colour of the stroking modes
   #   -strokeWidth the outline width of the stroking modes, in the document
@@ -306,6 +312,13 @@ oo::define ::tclpdf::document::document {
     # refusal that leaves behind the very thing it refused.
     set resolved [my TextResolve [dict get $parsed family] \
         [dict get $parsed style]]
+    # A replacement the chain cannot set is refused HERE, before anything is
+    # stored, and for the same reason: the family, the chain and the two
+    # options may all change in this one call, and the question is asked of
+    # what they come to together (textMissing.tcl).
+    if {[dict get $parsed missing] eq "replace"} {
+      my TextMissingCheck [dict replace $parsed resolved $resolved]
+    }
     foreach {name value} $parsed {
       my TextSet $name $value
     }
@@ -514,6 +527,20 @@ oo::define ::tclpdf::document::document {
             "tclpdf: -breakHyphen says the line ends on a break\
             hyphen, and \"$string\" has no hyphen in it"
       }
+      # The hyphen is then the breaker's, not the text's, and a replacement
+      # is for the text alone: under -missing replace a face without one is
+      # refused as the breaker refuses it (textBlock.tcl,
+      # [TextBlockHyphenSettable]) rather than drawn as the replacement.
+      if {[dict get $state missing] eq "replace"} {
+        set line {}
+        foreach name $::tclpdf::text::lineOptions {
+          lappend line -$name [dict get $state $name]
+        }
+        if {[llength [my textMissing - {*}$line]]} {
+          package require tclpdf::textBlock 1.23-
+          my TextBlockHyphenRefusal
+        }
+      }
     }
     # A LINE FITTED INTO A BOX, built on 2026-08-24. The recipe was in
     # examples/01.06 - measure with [textWidth], work out a factor, set
@@ -529,7 +556,8 @@ oo::define ::tclpdf::document::document {
       #
       # This is the facade rule in practice - a caller says "text with a
       # width" and does not need to know that two files are involved.
-      package require tclpdf::textBlock
+      # 1.23 for the break hyphen kept out of a replacement.
+      package require tclpdf::textBlock 1.23-
       my TextLeading $state $given $args
       set options [my TextBlockCheck $options]
     } else {
@@ -1143,9 +1171,21 @@ oo::define ::tclpdf::document::document {
   # Without a chain there is one piece and no character is looked at here at
   # all: the encoders do that work as they always have, and this call costs a
   # list of two.
+  #
+  # UNLESS A REPLACEMENT WAS ASKED FOR. Under -missing replace the walk below
+  # runs for a family alone as well, because the encoders refuse and only the
+  # walk can replace (textMissing.tcl). A replaced character comes back as a
+  # segment of its own with two more elements, {face replacement original
+  # position}: measured as the replacement, drawn as the replacement inside
+  # an ActualText span with the original - see [TextShow].
+  #
+  # It costs what a chain costs, and only where it was asked for. Measured
+  # 2026-11-25, a paragraph of 3076 characters broken to 150 mm in
+  # DejaVu Sans: 143-147 ms before the option existed, 144-147 ms after it
+  # without -missing replace, 184-188 ms with it - the 182-187 ms of a chain.
   method TextSegments {state string} {
     set chain [my TextChain $state]
-    if {[llength $chain] < 2} {
+    if {[llength $chain] < 2 && [dict get $state missing] eq "error"} {
       return [list [list [lindex $chain 0] $string]]
     }
     set segments {}
@@ -1229,6 +1269,19 @@ oo::define ::tclpdf::document::document {
           dict set decided $char $found
         }
       }
+      if {$found eq {} && [dict get $state missing] ne "error"} {
+        # Asked for: the character becomes a segment of its own, and the
+        # stretch in front of it is closed so that the order stays the order
+        # of the string (textMissing.tcl).
+        if {$piece ne {}} {
+          lappend segments [list $face $piece]
+          set piece {}
+        }
+        lappend segments \
+            [my TextMissingSegment $state $chain $char $position]
+        incr position
+        continue
+      }
       if {$found eq {}} {
         # The refusal the chain did not remove, in the shape every other
         # missing glyph is refused in (manual, "Error codes"): the position is
@@ -1262,7 +1315,12 @@ oo::define ::tclpdf::document::document {
       append piece $unit
       incr position [llength [split $unit {}]]
     }
-    lappend segments [list $face $piece]
+    # The last stretch - empty only where the string ended on a replaced
+    # character, which needs no empty show operator behind it. An empty
+    # string is still one segment.
+    if {$piece ne {} || ![llength $segments]} {
+      lappend segments [list $face $piece]
+    }
     return $segments
   }
 
@@ -1892,7 +1950,12 @@ oo::define ::tclpdf::document::document {
       # is part of the break hyphen, and an empty ActualText covers a piece of
       # content, not a piece of the text.
       my content $kernFirst
-      my content [my TextShow $font $state "-" auto]
+      # With the replacement turned off: the hyphen is the breaker's, not a
+      # character of the text, and a replacement is for the text alone - see
+      # [TextBlockHyphenSettable] in textBlock.tcl, which refused the block
+      # before it got here if the face has no hyphen.
+      my content [my TextShow $font [dict replace $state missing error] "-" \
+          auto]
       my content "EMC\n"
       if {$second ne {}} {
         my content $kernSecond
@@ -2211,9 +2274,15 @@ oo::define ::tclpdf::document::document {
   # for why the family cannot decide it for a chain - and svgElement.tcl
   # passes 0, because the SVG road writes no Tw either and a kick without one
   # would be word spacing where the same text has none today.
+  #
+  # A REPLACED CHARACTER is a segment of four elements (textMissing.tcl) and
+  # never takes the shortcut below, which shows the string as it was given:
+  # its replacement is shown instead, and [TextMissingShow] puts it into an
+  # ActualText span with the original and tells the caller.
   method TextShow {font state string byTJ} {
     set segments [my TextSegments $state $string]
-    if {[llength $segments] == 1 && [lindex $segments 0 0] eq $font} {
+    if {[llength $segments] == 1 && [lindex $segments 0 0] eq $font
+        && [llength [lindex $segments 0]] == 2} {
       return [my TextShowOne $font $state $string \
           [my TextShowTJ $font $state $byTJ]]
     }
@@ -2227,8 +2296,12 @@ oo::define ::tclpdf::document::document {
             $size Tf\n"
         set current $face
       }
-      append result [my TextShowOne $face $state $piece \
+      set show [my TextShowOne $face $state $piece \
           [my TextShowTJ $face $state $byTJ]]
+      if {[llength $segment] > 2} {
+        set show [my TextMissingShow $state $segment $show]
+      }
+      append result $show
     }
     if {$current ne $font} {
       append result "[my TextResource $font [dict get $state direction]]\
@@ -3122,6 +3195,17 @@ oo::define ::tclpdf::document::document {
           }
         }
       }
+      missing - replacement {
+        # What happens to a character no face of the chain has, and the
+        # character drawn in its place: textMissing.tcl, which is loaded only
+        # for a value other than the default - every [font] call checks every
+        # option of the state, and a document that never asks for a
+        # replacement must not load the module for it.
+        if {!(($name eq "missing" && $value eq "error")
+            || ($name eq "replacement" && $value eq "\uFFFD"))} {
+          my TextMissingOption $name $value
+        }
+      }
       color - stroke {
         # The empty string leaves the colour of the stream in force - that is
         # what TextRun reads it as - so only a non-empty value has to parse.
@@ -3181,7 +3265,7 @@ oo::define ::tclpdf::document::document {
           family helvetica style {} size 12 color black spacing 0 \
           wordSpacing 0 stretch 100 leading {} rise 0 kerning 1 \
           ligatures 1 unshaped 0 render fill stroke {} strokeWidth {} \
-          fallback {} resolved Helvetica]
+          fallback {} missing error replacement \uFFFD resolved Helvetica]
     }
     return
   }
@@ -3211,6 +3295,7 @@ oo::define ::tclpdf::document::document {
   method TextMerge {arguments} {
     set state [dict merge [my TextState] $::tclpdf::text::runOptions]
     set changed 0
+    set chained 0
     foreach {option value} $arguments {
       set name [string trimleft $option -]
       if {[dict exists $::tclpdf::text::runOptions $name]} {
@@ -3219,8 +3304,11 @@ oo::define ::tclpdf::document::document {
       if {$name in $::tclpdf::text::stateOptions} {
         set value [my TextCheck $name $value]
         dict set state $name $value
-        if {$name in {family style}} {
-          set changed 1
+        if {$name in {family style fallback missing replacement}} {
+          set chained 1
+          if {$name in {family style}} {
+            set changed 1
+          }
         }
       }
     }
@@ -3357,6 +3445,12 @@ oo::define ::tclpdf::document::document {
     if {$changed} {
       dict set state resolved \
           [my TextResolve [dict get $state family] [dict get $state style]]
+    }
+    # Whether the chain can set its replacement, asked again only where this
+    # call changed what the answer depends on: the stored state was asked by
+    # [font] when it was written (textMissing.tcl).
+    if {$chained && [dict get $state missing] eq "replace"} {
+      my TextMissingCheck $state
     }
     if {[dict get $state leading] eq {}} {
       dict set state leading [expr {[dict get $state size] * 1.2}]

@@ -1,0 +1,535 @@
+# textMissing.test --
+#
+# A character no face of the chain can set: the question [textMissing], and
+# the replacement on request, -missing replace with -replacement - what is
+# drawn, what is measured, what the file says the text was, and what the
+# caller is told.
+#
+# The default stays the refusal, and section 6 holds that a document that
+# never asks writes the bytes it always wrote.
+#
+# Copyright (C) 2026 Alexander Schoepe, Bochum, DE
+#
+# See the file "license.terms" for information on usage and redistribution
+# of this file (MIT License).
+
+package require tcltest 2.2
+namespace import -force tcltest::*
+
+package require tclpdf
+package require tclpdf::text
+package require tclpdf::textMissing
+source [file join [file dirname [info script]] helper.tcl]
+
+set here [file dirname [file dirname [file normalize [info script]]]]
+# DejaVu Sans has U+FFFD, the default replacement, and no CJK; Niconne has
+# neither U+FFFD nor U+2714, which DejaVu Sans has - so the two make a chain
+# where the second face sets both what the first lacks and the replacement.
+set ::tmFace [file join $here examples assets fonts DejaVuSans.ttf]
+set ::tmScript [file join $here examples assets fonts google \
+    Niconne-Regular.ttf]
+testConstraint haveFace [file exists $::tmFace]
+testConstraint haveScript [file exists $::tmScript]
+testConstraint havePdfToText [expr {[auto_execok pdftotext] ne {}}]
+testConstraint verapdf [expr {[auto_execok verapdf] ne {}}]
+
+# A character beyond the BMP made from its UTF-8 bytes: a \U escape is read
+# as U+FFFD by Tcl 8.6 itself, and the sources are ASCII throughout. Under
+# 8.6 this is a surrogate pair, under 9 one character.
+set ::tmThumb [encoding convertfrom utf-8 "\xF0\x9F\x91\x8D"]
+
+# A document with one page and DejaVu Sans as "dv" - plus Niconne as "nic"
+# where the face is there.
+proc tmDoc {} {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font embed dv $::tmFace
+  if {[file exists $::tmScript]} {
+    $doc font embed nic $::tmScript
+  }
+  return $doc
+}
+
+# The ActualText spans of a stream, as the hex strings they carry.
+proc tmSpans {stream} {
+  return [regexp -all -inline {/ActualText <[0-9a-f]+>} $stream]
+}
+
+# --- 1. the question ---------------------------------------------------------
+
+test textMissing-1.1 {the characters the family cannot set, with positions} -constraints haveFace -body {
+  set doc [tmDoc]
+  set answer [$doc textMissing "a\u4E2Db\u4E2D c\u3042" -family dv]
+  $doc destroy
+  set answer
+} -result {U+4E2D 1 U+4E2D 3 U+3042 6}
+
+test textMissing-1.2 {a character beyond the BMP is one code point, under 8.6 as well} -constraints haveFace -body {
+  # Positions count code points: under Tcl 8.6 the thumb is two UTF-16 units
+  # and the CJK character stands at [string first] 6, not 5.
+  set doc [tmDoc]
+  set answer [$doc textMissing "x $::tmThumb y \u4E2D" -family dv]
+  $doc destroy
+  set answer
+} -result {U+1F44D 2 U+4E2D 6}
+
+test textMissing-1.3 {a lone half of a surrogate pair is named as itself} -constraints haveFace -body {
+  # What a [string index] between the two halves leaves behind under 8.6;
+  # written as an escape it is a lone surrogate under both interpreters.
+  set doc [tmDoc]
+  set answer [list [$doc textMissing "a\uD83Db" -family dv] \
+      [$doc textMissing [string index $::tmThumb 0] -family dv]]
+  $doc destroy
+  # Under 9 the index is the whole character, which DejaVu Sans lacks too.
+  list [lindex $answer 0] [string match {U+* 0} [lindex $answer 1]]
+} -result {{U+D83D 1} 1}
+
+test textMissing-1.4 {with a chain only what no face has is missing} -constraints {haveFace haveScript} -body {
+  set doc [tmDoc]
+  set alone [$doc textMissing "\u2714\u4E2D" -family nic]
+  set chained [$doc textMissing "\u2714\u4E2D" -family nic -fallback dv]
+  $doc destroy
+  list $alone $chained
+} -result {{U+2714 0 U+4E2D 1} {U+4E2D 1}}
+
+test textMissing-1.5 {a standard face, and a line feed passed over and counted} -body {
+  set doc [tclpdf new -unit mm]
+  set answer [list [$doc textMissing "a\u0142b" -family helvetica] \
+      [$doc textMissing "ab\nc\u2192" -family helvetica]]
+  $doc destroy
+  set answer
+} -result {{U+0142 1} {U+2192 4}}
+
+test textMissing-1.6 {what is never drawn is not missing, and a settable string has nothing} -body {
+  set doc [tclpdf new -unit mm]
+  set answer [list [$doc textMissing "a\u00ADb\u200Bc\uFEFF" -family helvetica] \
+      [$doc textMissing "M\u00FCller" -family helvetica]]
+  $doc destroy
+  set answer
+} -result {{} {}}
+
+test textMissing-1.7 {the positions are the ones the refusal names} -constraints haveFace -body {
+  set doc [tmDoc]
+  set string "$::tmThumb \u00E9 \u4E2D"
+  set code [::tclpdfTest::refusalCode {$doc textWidth $string -family dv}]
+  set answer [$doc textMissing $string -family dv]
+  $doc destroy
+  list [lrange $code 3 4] [lrange $answer 0 1] [lrange $answer 2 3]
+} -result {{U+1F44D 0} {U+1F44D 0} {U+4E2D 4}}
+
+test textMissing-1.8 {it takes the font options and nothing else} -body {
+  set doc [tclpdf new -unit mm]
+  set code [::tclpdfTest::refusalCode {$doc textMissing abc -width 40}]
+  $doc destroy
+  lrange $code 0 1
+} -result {TCLPDF OPTION}
+
+# --- 2. the two options -------------------------------------------------------
+
+test textMissing-2.1 {the defaults: refuse, and U+FFFD should a replacement be asked for} -body {
+  set doc [tclpdf new -unit mm]
+  set state [$doc font]
+  $doc destroy
+  list [dict get $state missing] [format %04X [scan [dict get $state replacement] %c]]
+} -result {error FFFD}
+
+test textMissing-2.2 {-missing is error or replace} -body {
+  set doc [tclpdf new -unit mm]
+  set answer [::tclpdfTest::refuse {$doc font -missing skip}]
+  $doc destroy
+  set answer
+} -result {1 1 {TCLPDF FONT ARGUMENT missing}}
+
+test textMissing-2.3 {-replacement is one character that draws something, and never .notdef} -body {
+  set doc [tclpdf new -unit mm]
+  set answer {}
+  foreach value [list {} .notdef ab \u00AD \u200B] {
+    lappend answer [::tclpdfTest::refusalCode {$doc font -replacement $value}]
+  }
+  $doc destroy
+  lsort -unique $answer
+} -result {{TCLPDF FONT ARGUMENT replacement}}
+
+test textMissing-2.4 {a replacement the chain cannot set is refused at the call, and nothing is stored} -constraints haveFace -body {
+  set doc [tmDoc]
+  $doc font -family dv
+  set answer [::tclpdfTest::refuse {$doc font -missing replace \
+      -replacement \u4E2D}]
+  set state [$doc font]
+  $doc destroy
+  list $answer [dict get $state missing] \
+      [format %04X [scan [dict get $state replacement] %c]]
+} -result {{1 1 {TCLPDF FONT REPLACEMENT U+4E2D dv}} error FFFD}
+
+test textMissing-2.5 {the default replacement in a standard face is refused, ? is not} -body {
+  set doc [tclpdf new -unit mm]
+  set refused [::tclpdfTest::refusalCode {$doc font -missing replace}]
+  $doc font -missing replace -replacement ?
+  set state [$doc font]
+  $doc destroy
+  list $refused [dict get $state missing] [dict get $state replacement]
+} -result {{TCLPDF FONT REPLACEMENT U+FFFD Helvetica} replace ?}
+
+test textMissing-2.6 {a later family that cannot set the replacement is refused} -constraints haveFace -body {
+  set doc [tmDoc]
+  $doc page add
+  $doc font -family dv -missing replace
+  set inFont [::tclpdfTest::refusalCode {$doc font -family helvetica}]
+  set perCall [::tclpdfTest::refusalCode {$doc text "a\u4E2D" -at {20 20} \
+      -family helvetica}]
+  set family [dict get [$doc font] family]
+  $doc destroy
+  list $inFont $perCall $family
+} -result {{TCLPDF FONT REPLACEMENT U+FFFD Helvetica} {TCLPDF FONT REPLACEMENT U+FFFD Helvetica} dv}
+
+test textMissing-2.7 {a space is a replacement} -constraints haveFace -body {
+  set doc [tmDoc]
+  $doc font -family dv -missing replace -replacement " "
+  $doc text "a\u4E2Db" -at {20 20}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [tmSpans $content] [regexp {\(\\000\\003\) Tj} $content]
+} -result {{{/ActualText <feff4e2d>}} 1}
+
+# --- 3. the replacement, wherever the font state reaches ----------------------
+
+test textMissing-3.1 {one line: the replacement inside an ActualText span with the original} -constraints haveFace -body {
+  set doc [tmDoc]
+  $doc font -family dv -missing replace
+  $doc text "a $::tmThumb \u4E2D" -at {20 20}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  list [tmSpans $content] [regexp -all {BDC\n\(\\024\\374\) Tj\nEMC} $content]
+} -result {{{/ActualText <feffd83ddc4d>} {/ActualText <feff4e2d>}} 2}
+
+test textMissing-3.2 {the width is the width of what is drawn} -constraints haveFace -body {
+  set doc [tmDoc]
+  set drawn [$doc textWidth "a\uFFFDb\uFFFD" -family dv]
+  $doc font -family dv -missing replace
+  set replaced [$doc textWidth "a\u4E2Db$::tmThumb"]
+  $doc destroy
+  if {$drawn eq $replaced} {
+    return same
+  }
+  list $drawn $replaced
+} -result same
+
+test textMissing-3.3 {with a chain the replacement comes from the face that has it} -constraints {haveFace haveScript} -body {
+  set doc [tmDoc]
+  $doc font -family nic -fallback dv -missing replace
+  $doc text "x\u2714\u4E2D" -at {20 20}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  # Niconne for the x, DejaVu Sans for the check mark it lacks and for the
+  # replacement, Niconne again behind the line.
+  list [regexp -all -inline {/FE[a-z]+ 12 Tf} $content] [tmSpans $content]
+} -result {{{/FEnic 12 Tf} {/FEdv 12 Tf} {/FEnic 12 Tf}} {{/ActualText <feff4e2d>}}}
+
+test textMissing-3.4 {a standard face with a replacement it has} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc font -family helvetica -missing replace -replacement ?
+  $doc text "a\u0142b" -at {20 20}
+  set content [::tclpdfTest::content $doc]
+  $doc destroy
+  regexp -inline {\(a\) Tj\n/Span <</ActualText <feff0142>>> BDC\n\(\?\) Tj\nEMC\n\(b\) Tj} $content
+} -result {{(a) Tj
+/Span <</ActualText <feff0142>>> BDC
+(?) Tj
+EMC
+(b) Tj}}
+
+test textMissing-3.5 {a paragraph replaces in every line and counts once per character} -constraints haveFace -body {
+  set doc [tmDoc]
+  $doc font -family dv -size 10 -missing replace
+  $doc text "Die Rechnung \u4E2D geht an Herrn \u4E2D und an Frau\
+      \u3042, mit Dank." -at {20 20} -width 30
+  set content [::tclpdfTest::content $doc]
+  set replaced [$doc textReplaced]
+  $doc destroy
+  list [llength [tmSpans $content]] $replaced
+} -result {3 {U+4E2D 2 U+3042 1}}
+
+test textMissing-3.6 {the rest a height limit hands back is the string as it was given} -constraints haveFace -body {
+  set doc [tmDoc]
+  $doc font -family dv -size 10 -missing replace
+  set rest [dict get [$doc text "Erste Zeile hier. Zweite Zeile mit\
+      \u4E2D und $::tmThumb am Ende." -at {20 20} -width 30 -height 5] rest]
+  $doc destroy
+  list [expr {[string first \u4E2D $rest] >= 0}] \
+      [expr {[string first $::tmThumb $rest] >= 0}] \
+      [expr {[string first \uFFFD $rest] >= 0}]
+} -result {1 1 0}
+
+test textMissing-3.7 {a table cell} -constraints haveFace -body {
+  set doc [tmDoc]
+  $doc font -family dv -size 9 -missing replace
+  # The style names the face: a table sets its cells in faces of its own,
+  # Helvetica unless said otherwise, and that one has no U+FFFD - which the
+  # table call would refuse, as textMissing-2.6 shows for [text].
+  $doc table -at {20 20} -width 100 -style {family dv} \
+      -body [list [list "Herr \u4E2D" ok]]
+  set content [::tclpdfTest::content $doc]
+  set replaced [$doc textReplaced]
+  $doc destroy
+  list [tmSpans $content] $replaced
+} -result {{{/ActualText <feff4e2d>}} {U+4E2D 1}}
+
+test textMissing-3.8 {page numbers, drawn at write, once per page} -constraints haveFace -body {
+  set doc [tmDoc]
+  $doc page add
+  $doc font -family dv -size 9 -missing replace
+  $doc pageNumbers -at {100 285} -format "%n \u4E2D %m"
+  set before [$doc textReplaced]
+  set path [::tclpdfTest::scratch textMissing-3.8.pdf]
+  $doc write $path
+  file delete $path
+  set after [$doc textReplaced]
+  set forms [llength [::tclpdfTest::objects $doc {/ActualText <feff4e2d>}]]
+  $doc destroy
+  list $before $after $forms
+} -result {{} {U+4E2D 2} 2}
+
+test textMissing-3.9 {textPath and leader} -constraints haveFace -body {
+  set doc [tmDoc]
+  $doc font -family dv -size 10 -missing replace
+  $doc textPath "a\u4E2Db" -segments {{move 20 50} {line 120 50}}
+  $doc leader "Kapitel \u3042" 12 -at {20 70} -width 100
+  set content [::tclpdfTest::content $doc]
+  set replaced [$doc textReplaced]
+  $doc destroy
+  list [tmSpans $content] $replaced
+} -result {{{/ActualText <feff4e2d>} {/ActualText <feff3042>}} {U+4E2D 1 U+3042 1}}
+
+test textMissing-3.10 {text inside an SVG drawing} -constraints haveFace -body {
+  set doc [tmDoc]
+  $doc font -missing replace -family dv
+  $doc svg -data "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\"\
+      height=\"100\"><text x=\"10\" y=\"20\" font-family=\"dv\"\
+      >a\u4E2Db</text></svg>" -at {20 50} -size {50 50}
+  set content [::tclpdfTest::content $doc]
+  set replaced [$doc textReplaced]
+  $doc destroy
+  list [tmSpans $content] $replaced
+} -result {{{/ActualText <feff4e2d>}} {U+4E2D 1}}
+
+# --- 4. what the file says the text is -----------------------------------------
+
+test textMissing-4.1 {ToUnicode names the glyph drawn, U+FFFD} -constraints haveFace -body {
+  set doc [tmDoc]
+  $doc font -family dv -missing replace
+  $doc text "a\u4E2D" -at {20 20}
+  set path [::tclpdfTest::scratch textMissing-4.1.pdf]
+  $doc write $path
+  file delete $path
+  set writer [$doc writer]
+  set map {}
+  for {set number 1} {$number <= [$writer count]} {incr number} {
+    if {[regexp {/ToUnicode (\d+) 0 R} [$writer body $number] -> found]} {
+      set map [::tclpdfTest::streamOf $writer $found]
+    }
+  }
+  $doc destroy
+  list [regexp {<14FC> <FFFD>} $map] [regexp {4E2D} $map]
+} -result {1 0}
+
+test textMissing-4.2 {a reader extracts the original, the page shows the replacement} -constraints {haveFace havePdfToText} -body {
+  set doc [tmDoc]
+  $doc font -family dv -missing replace
+  $doc text "Notiz $::tmThumb \u4E2D Ende" -at {20 20}
+  set path [::tclpdfTest::scratch textMissing-4.2.pdf]
+  $doc write $path
+  $doc destroy
+  set channel [open "|pdftotext -enc UTF-8 [list $path] -" r]
+  fconfigure $channel -encoding utf-8
+  set text [string trim [read $channel]]
+  close $channel
+  file delete $path
+  if {$text eq "Notiz $::tmThumb \u4E2D Ende"} {
+    return original
+  }
+  set text
+} -result original
+
+# --- 5. what the caller is told -------------------------------------------------
+
+test textMissing-5.1 {textReplaced counts per code point and starts afresh when asked} -constraints haveFace -body {
+  set doc [tmDoc]
+  $doc font -family dv -missing replace
+  $doc text "\u4E2D$::tmThumb" -at {20 20}
+  $doc text "\u4E2D" -at {20 30}
+  set first [$doc textReplaced]
+  set second [$doc textReplaced]
+  $doc text "\u3042" -at {20 40}
+  set third [$doc textReplaced]
+  $doc destroy
+  list $first $second $third
+} -result {{U+4E2D 2 U+1F44D 1} {} {U+3042 1}}
+
+test textMissing-5.2 {measuring is not drawing: nothing is counted} -constraints haveFace -body {
+  set doc [tmDoc]
+  $doc font -family dv -missing replace
+  $doc textWidth "a\u4E2Db"
+  $doc textHeight "a\u4E2Db und noch mehr Text dazu" -width 20
+  $doc textLines "a\u4E2Db und noch mehr Text dazu" -width 20
+  $doc textMissing "a\u4E2Db"
+  set replaced [$doc textReplaced]
+  $doc destroy
+  set replaced
+} -result {}
+
+test textMissing-5.3 {glyphReplaced fires per character with code point, position and faces} -constraints {haveFace haveScript} -body {
+  set doc [tmDoc]
+  set ::tmEvents {}
+  $doc on glyphReplaced [list apply {{document args} {
+    lappend ::tmEvents $args
+  }}]
+  $doc font -family nic -fallback dv -missing replace
+  $doc text "$::tmThumb x \u4E2D" -at {20 20}
+  $doc textWidth "\u4E2D"
+  $doc destroy
+  set ::tmEvents
+} -result {{U+1F44D 0 {nic dv}} {U+4E2D 4 {nic dv}}}
+
+test textMissing-5.4 {the event is one the document names} -body {
+  set doc [tclpdf new -unit mm]
+  set events [$doc events]
+  $doc destroy
+  lindex $events end
+} -result glyphReplaced
+
+# --- 6. the default writes what it always wrote --------------------------------
+
+test textMissing-6.1 {-missing error, written out, changes no byte} -constraints haveFace -body {
+  ::tclpdfTest::sameBytes {
+    $doc font embed dv $::tmFace
+    $doc font -family dv -missing error -replacement \uFFFD
+    $doc text "Rechnung \u2714" -at {20 20}
+  } {
+    $doc font embed dv $::tmFace
+    $doc font -family dv
+    $doc text "Rechnung \u2714" -at {20 20}
+  }
+} -result same
+
+test textMissing-6.2 {-missing replace changes no byte where nothing is missing} -constraints haveFace -body {
+  ::tclpdfTest::sameBytes {
+    $doc font embed dv $::tmFace
+    $doc font -family dv -missing replace
+    $doc text "Rechnung \u2714 (Klammer) office" -at {20 20}
+    $doc text "ein Absatz, der umbricht" -at {20 30} -width 20
+  } {
+    $doc font embed dv $::tmFace
+    $doc font -family dv
+    $doc text "Rechnung \u2714 (Klammer) office" -at {20 20}
+    $doc text "ein Absatz, der umbricht" -at {20 30} -width 20
+  }
+} -result same
+
+test textMissing-6.3 {a document that never asks does not load the module} -body {
+  ::tclpdfTest::freshInterp {
+    package require tclpdf
+    set doc [tclpdf new -unit mm]
+    $doc page add
+    $doc font -family helvetica -missing error -replacement \uFFFD
+    $doc text "Rechnung" -at {20 20}
+    $doc textWidth "M\u00FCller"
+    catch {$doc text "\u0142" -at {20 30}}
+    puts [list [package provide tclpdf::textMissing]]
+    $doc destroy
+  }
+} -result {{}}
+
+test textMissing-6.4 {without a replacement the refusal is the one it always was} -constraints haveFace -body {
+  set doc [tmDoc]
+  set code [::tclpdfTest::refusalCode {$doc text "a\u4E2D" -at {20 20} \
+      -family dv}]
+  $doc destroy
+  set code
+} -result {TCLPDF FONT GLYPH U+4E2D 1 dv}
+
+# --- 7. the conformance a replacement keeps -----------------------------------
+
+test textMissing-7.1 {PDF/A-3u: the replacement is an embedded glyph with a Unicode value} -constraints {haveFace haveTdom verapdf} -body {
+  set doc [tmDoc]
+  $doc info Title "A replacement"
+  $doc pdfa -part 3 -conformance U
+  $doc font -family dv -missing replace
+  $doc text "Rechnung $::tmThumb \u4E2D" -at {20 20}
+  set path [::tclpdfTest::scratch textMissing-7.1.pdf]
+  $doc write $path
+  $doc destroy
+  set report [::tclpdfTest::verapdf $path 3u]
+  file delete $path
+  set report
+} -result ok
+
+test textMissing-7.2 {PDF/UA-1: the original as ActualText inside the paragraph} -constraints {haveFace haveTdom verapdf} -body {
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc info Title "A replacement"
+  $doc language de-DE
+  $doc ua -part 1
+  $doc page add
+  $doc font embed dv $::tmFace
+  $doc font -family dv -size 11 -missing replace
+  $doc text "Rechnung $::tmThumb \u4E2D" -at {20 20}
+  $doc text "Ein Absatz mit \u4E2D darin, der umbricht." -at {20 30} -width 40
+  set path [::tclpdfTest::scratch textMissing-7.2.pdf]
+  $doc write $path
+  $doc destroy
+  set report [::tclpdfTest::verapdf $path ua1]
+  file delete $path
+  set report
+} -result ok
+
+# --- 8. what the package puts in is not the text's ------------------------------
+
+# A face without a hyphen: Noto Emoji has none, and has the grinning face to
+# serve as a replacement it can set.
+set ::tmEmoji [file join $here examples assets fonts google \
+    NotoEmoji-Variable.ttf]
+testConstraint haveEmoji [file exists $::tmEmoji]
+set ::tmGrin [encoding convertfrom utf-8 "\xF0\x9F\x98\x80"]
+
+test textMissing-8.1 {the break hyphen is refused as the breaker's, not replaced} -constraints haveEmoji -body {
+  # The replacement is for the characters of the text. A hyphen the breaker
+  # hangs on a piece of a word - at an emergency break, at a soft hyphen, or
+  # the one -breakHyphen names - is the package's, and a face without one is
+  # refused with the code the breaker has always used for it.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc font embed emo $::tmEmoji
+  $doc page add
+  $doc font -family emo -size 12 -missing replace -replacement $::tmGrin
+  set g $::tmGrin
+  set codes [list \
+      [::tclpdfTest::refusalCode {$doc text "$g$g$g$g" -at {20 30} \
+          -width 11 -emergencyHyphen 1}] \
+      [::tclpdfTest::refusalCode {$doc text "$g\u00AD$g\u00AD$g" -at {20 60} \
+          -width 11}] \
+      [::tclpdfTest::refusalCode {$doc text "$g-" -at {20 90} \
+          -breakHyphen 1}]]
+  set spans [tmSpans [::tclpdfTest::content $doc]]
+  set replaced [$doc textReplaced]
+  $doc destroy
+  list [lsort -unique $codes] $spans $replaced
+} -result {{{TCLPDF TEXT BREAKHYPHEN glyph}} {} {}}
+
+test textMissing-8.2 {a face with a hyphen breaks as before and replaces only the text} -constraints haveFace -body {
+  # Tagged, so the break hyphen is drawn in its own empty ActualText span -
+  # with no replacement span inside it, and not counted.
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc tagged 1
+  $doc page add
+  $doc font embed dv $::tmFace
+  $doc font -family dv -size 10 -missing replace
+  $doc text "Betriebs\u00ADkosten\u00ADab\u00ADrech\u00ADnung \u4E2D und mehr" \
+      -at {20 20} -width 25
+  set content [::tclpdfTest::content $doc]
+  set replaced [$doc textReplaced]
+  $doc destroy
+  list [expr {[regexp -all {/ActualText <FEFF>} $content] > 0}] \
+      [tmSpans $content] $replaced
+} -result {1 {{/ActualText <feff4e2d>}} {U+4E2D 1}}
+
+cleanupTests

@@ -107,7 +107,8 @@ package require tclpdf::color 1.0-
 package require tclpdf::geometry 1.0-
 package require tclpdf::document 1.0-
 # 1.4 for -rect, -page, -size and -borderWidth read in decimal.
-package require tclpdf::field 1.4-
+# 1.5 for [FieldFaceOptions]: one face, no chain, no replacement.
+package require tclpdf::field 1.5-
 
 ::tclpdf::field::register check tclpdf::fieldButton
 ::tclpdf::field::register radio tclpdf::fieldButton
@@ -1060,11 +1061,12 @@ oo::define ::tclpdf::document::document {
         -size [list $inner [expr {$height - 2 * $padding}]]
     my text [dict get $data caption] -at [list [expr {$width / 2.0}] $top] \
         -anchor top -align center \
-        -size [dict get $data size] -family [dict get $data family] \
-        -style [dict get $data style] -color [dict get $data color]
+        {*}[my FieldFaceOptions [dict get $data size] \
+        [dict get $data family] [dict get $data style]] \
+        -color [dict get $data color]
     my restore
     return
   }
 }
 
-package provide tclpdf::fieldButton 1.3
+package provide tclpdf::fieldButton 1.4

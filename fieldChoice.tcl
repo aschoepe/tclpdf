@@ -103,7 +103,8 @@ package require tclpdf::option 1.4-
 package require tclpdf::color 1.0-
 package require tclpdf::geometry 1.0-
 # 1.4 for -rect, -page, -size and -borderWidth read in decimal.
-package require tclpdf::field 1.4-
+# 1.5 for [FieldFaceOptions]: one face, no chain, no replacement.
+package require tclpdf::field 1.5-
 
 # Point 1 of the contract. Two subcommands, one module: the two shapes of a
 # choice field differ in one flag bit and share everything else.
@@ -662,8 +663,8 @@ oo::define ::tclpdf::document::document {
     # EVERY value is named, none inherited: this runs at write time, where
     # the document's text state is whatever the last [font] call left behind.
     set size [dict get $data size]
-    set font [list -size $size -family [dict get $data family] \
-        -style [dict get $data style] -color [dict get $data color]]
+    set font [list {*}[my FieldFaceOptions $size [dict get $data family] \
+        [dict get $data style]] -color [dict get $data color]]
     if {[dict get $data combo]} {
       my FieldChoicePaintLine $data $padding $inner $width $height $font
     } else {
@@ -738,4 +739,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::fieldChoice 1.3
+package provide tclpdf::fieldChoice 1.4

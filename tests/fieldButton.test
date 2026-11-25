@@ -1417,6 +1417,24 @@ test fieldButton-31.1 {a caption the button's font cannot set is refused at the 
     set outcome
 } -result {1 1 {TCLPDF FIELD GLYPH caption}}
 
+test fieldButton-31.2 {a caption keeps out the running text's chain and replacement} -constraints dejavu -body {
+    set doc [tclpdf new -unit mm -format a4 -compress 0]
+    $doc page add
+    $doc font embed dv [file join [file dirname [file dirname \
+        [file normalize [info script]]]] examples assets fonts DejaVuSans.ttf]
+    $doc font -family dv -fallback dv -missing replace
+    set refused [::tclpdfTest::refuse \
+        {$doc field button r -rect {10 50 30 8} -caption "a\u0141b"}]
+    $doc field button b -rect {10 30 30 8} -caption Print
+    set path [buttonFile $doc fieldButton-31.2.pdf]
+    set bytes [::tclpdfTest::readBytes $path]
+    file delete $path
+    $doc destroy
+    # Nothing on the page draws text, so a Tf in the file is the caption's.
+    list $refused [regexp -all -inline {/F[A-Za-z]+ [0-9.]+ Tf} $bytes] \
+        [regexp {ActualText} $bytes]
+} -result {{1 1 {TCLPDF FIELD GLYPH caption}} {{/FHelvetica 10 Tf} {/FHelvetica 10 Tf}} 0}
+
 # --- round 8: every measurement is turned away at the call -----------------
 
 test fieldButton-32.1 {NaN and Inf at -markSize, -borderWidth and -size} -body {

@@ -89,6 +89,7 @@ foreach tclpdfPkg {
     tclpdf::afmData
     tclpdf::afm
     tclpdf::text
+    tclpdf::textMissing
     tclpdf::textBlock
     tclpdf::textRun
     tclpdf::markup

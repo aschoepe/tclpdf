@@ -450,20 +450,29 @@ test pageNumber-9.3 {-anchor top sets the number one ascent lower, bottom one de
   # Measured against the metrics rather than against [text], so that the
   # meaning is checked as well as the agreement: Times-Roman at 8 pt, its
   # Ascender and Descender from the AFM, PDF y counting upwards.
+  #
+  # The baselines go into an array of their OWN name. The body runs at the
+  # global level, and font.test and document.test leave a plain "y" there:
+  # run before this file in one interpreter, "set y(baseline)" was refused
+  # with "variable isn't array" (measured 2026-11-25 with -file
+  # 'font.test pageNumber.test'). The alphabetical order of the full suite
+  # happened to hide it.
   set descriptor [::tclpdf::afm descriptor Times-Roman]
   set ascent [expr {[dict get $descriptor Ascender] * 8 / 1000.0}]
   set descent [expr {abs([dict get $descriptor Descender]) * 8 / 1000.0}]
   foreach anchor {baseline top middle bottom} {
     lassign [::pageNumberTest::pair "1" [list -at {105 285} -family times \
         -size 8 -anchor $anchor]] form
-    set y($anchor) [::pageNumberTest::y $form]
+    set baseOf($anchor) [::pageNumberTest::y $form]
   }
-  list [format %.3f [expr {$y(baseline) - $y(top)}]] [format %.3f $ascent] \
-      [format %.3f [expr {$y(bottom) - $y(baseline)}]] [format %.3f $descent] \
-      [format %.3f [expr {$y(baseline) - $y(middle)}]] \
+  list [format %.3f [expr {$baseOf(baseline) - $baseOf(top)}]] \
+      [format %.3f $ascent] \
+      [format %.3f [expr {$baseOf(bottom) - $baseOf(baseline)}]] \
+      [format %.3f $descent] \
+      [format %.3f [expr {$baseOf(baseline) - $baseOf(middle)}]] \
       [format %.3f [expr {($ascent - $descent) / 2.0}]]
 } -result {5.464 5.464 1.736 1.736 1.864 1.864} -cleanup {
-  unset -nocomplain y
+  unset -nocomplain baseOf
 }
 
 test pageNumber-9.4 {a wrong -anchor is refused at the call, with the code [text] uses} -body {

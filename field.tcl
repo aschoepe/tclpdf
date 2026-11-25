@@ -372,8 +372,9 @@ package require tclpdf::geometry 1.0-
 package require tclpdf::document 1.0-
 # The default appearance string names a font resource, and the appearance
 # stream sets the value in it - so the text topic is not optional here the
-# way it is for a document that only draws rectangles.
-package require tclpdf::text 1.0-
+# way it is for a document that only draws rectangles. 1.28 for -missing,
+# which [FieldFaceOptions] names.
+package require tclpdf::text 1.28-
 # A WIDGET IS AN ANNOTATION - /Type /Annot /Subtype /Widget (ISO 32000-2,
 # 12.5.6.19) - and this module writes that dictionary itself, /Rect, /F,
 # /Contents and all. What it takes from annot.tcl is one thing: the table of
@@ -2002,6 +2003,27 @@ oo::define ::tclpdf::document::document {
     return $value
   }
 
+  # THE FONT OPTIONS OF AN APPEARANCE STREAM, for the three calls that paint
+  # a value, an option or a caption and for [FieldSettable] below, which asks
+  # the very question the painting will.
+  #
+  # ONE FACE AND NOTHING ELSE: -fallback {} and -missing error are named
+  # rather than inherited. The /DA names one font (ISO 32000-2, 12.7.4.3),
+  # and a reader that regenerates the appearance - every reader does, the
+  # moment the field is edited - sets the value in that font and no other.
+  # The appearance is painted at write time, though, with whatever the
+  # document's text state holds by then, and until 2026-11-25 a -fallback set
+  # for the running text reached into it: measured, a field in Helvetica
+  # with U+0141 in its value was taken, the letter painted from DejaVu Sans
+  # through the chain, and the /DA still said Helvetica. -missing replace
+  # reached in the same way and drew U+FFFD into the widget. Both are now
+  # kept out, so a character the field's face lacks is refused at the call,
+  # TCLPDF FIELD GLYPH, whatever the document's chain could have done.
+  method FieldFaceOptions {size family style} {
+    return [list -size $size -family $family -style $style -fallback {} \
+        -missing error]
+  }
+
   # CAN THE FIELD'S OWN FONT SET THIS TEXT? Asked at the call, of every
   # string a field type will later draw into an appearance stream - a value,
   # a default, a button's caption, an option of a choice.
@@ -2028,9 +2050,9 @@ oo::define ::tclpdf::document::document {
     if {$text eq {}} {
       return
     }
-    if {![catch {my textWidth $text -size [dict get $font size] \
-        -family [dict get $font family] -style [dict get $font style]} \
-        message options]} {
+    if {![catch {my textWidth $text {*}[my FieldFaceOptions \
+        [dict get $font size] [dict get $font family] \
+        [dict get $font style]]} message options]} {
       return
     }
     return -code error -errorcode [list TCLPDF FIELD GLYPH $which] \
@@ -2042,4 +2064,4 @@ oo::define ::tclpdf::document::document {
   }
 }
 
-package provide tclpdf::field 1.4
+package provide tclpdf::field 1.5

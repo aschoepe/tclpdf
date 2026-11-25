@@ -136,6 +136,38 @@ if {[catch {$doc text "\u05e9\u05dc\u05d5\u05dd" -at {190 166} -family body -dir
 
 Every alias named has to be embedded already - a misspelt one is refused at the call that wrote the option, not by whichever line first needs it. A standard family may stand in the chain too, and `-style` applies to it exactly as it applies to `-family`. The option reaches everything the state reaches: a paragraph, a table cell, `textPath`, `leader`, `pageNumbers`.
 
+### A character no face has: replaced on request
+
+```tcl
+# The refusal stays the default. Asked first, every character of a string at
+# once, positions in code points as the refusal counts them (under Tcl 8.6 a
+# character beyond the BMP is two units to [string first], one here):
+puts [$doc textMissing "CJK \u4e2d and \u3042" -family body]   ;# U+4E2D 4 U+3042 10
+
+# ASKED FOR: -missing replace draws -replacement (U+FFFD unless said otherwise)
+# where no face of the chain has a glyph. The original stays in the file as
+# ActualText - copy, search and a screen reader get it back - and every
+# replacement is counted and announced as the event glyphReplaced.
+set replacedLog {}
+$doc on glyphReplaced [list apply {{document codepoint position faces} {
+    lappend ::replacedLog "$codepoint at $position"
+}}]
+$doc font -family body -size 10 -missing replace
+$doc text "CJK \u4e2d in DejaVu Sans, drawn as U+FFFD" -at {20 170}
+puts "replaced: [$doc textReplaced] - [join $replacedLog {, }]"   ;# U+4E2D 1 - asking starts afresh
+$doc font -missing error                    ;# state like -fallback: back to refusing
+
+# The replacement must be settable by the chain, and that is checked where the
+# option is written: no standard face has U+FFFD.
+if {[catch {$doc font -family helvetica -missing replace} message]} {
+    puts "refused, as it should be: $message"
+} else {
+    puts "U+FFFD in a standard face: NOT REFUSED"
+}
+```
+
+`-replacement` is one character (`?` for a standard face, a space leaves a gap); `.notdef` is never offered - PDF/UA and PDF/A forbid it. The width is the width of what is drawn, the `rest` of `-height` keeps the original, and only drawing counts: `textWidth` and friends do not touch `textReplaced`. A table sets its cells in its own faces (Helvetica by default), so name a face with U+FFFD in its style, or use `-replacement ?`. In a ZUGFeRD invoice a replaced character makes the page and the XML disagree.
+
 ### Rendering modes
 
 ```tcl

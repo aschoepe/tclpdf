@@ -44,6 +44,12 @@ proc textDoc {args} {
   return $doc
 }
 
+# DejaVu Sans, for a document whose running text has a chain and a
+# replacement the fields must not inherit.
+set ::fieldRunningFace [file join [file dirname [file dirname [file normalize \
+    [info script]]]] examples assets fonts DejaVuSans.ttf]
+testConstraint runningFace [file exists $::fieldRunningFace]
+
 # The body of the widget annotation of one field, out of the writer.
 proc textWidget {doc name} {
   set writer [$doc writer]
@@ -362,6 +368,41 @@ test fieldText-20.4 {what WinAnsiEncoding has still goes through} -body {
     $doc destroy
     list $code $message
 } -result {0 t}
+
+# The document's -fallback and -missing replace are font state for the
+# running text, and a field is not running text: one face, the one its /DA
+# names (ISO 32000-2, 12.7.4.3), is all a reader regenerating the appearance
+# has. Until 2026-11-25 the chain reached into the appearance and the value
+# was taken.
+test fieldText-20.5 {the document's chain does not reach a field} -constraints runningFace -body {
+    set doc [textDoc]
+    $doc font embed dv $::fieldRunningFace
+    $doc font -fallback dv
+    set outcome [::tclpdfTest::refuse \
+        {$doc field text t -rect {10 10 40 8} -value "a\u0141b"}]
+    $doc destroy
+    set outcome
+} -result {1 1 {TCLPDF FIELD GLYPH value}}
+
+test fieldText-20.6 {nor does a replacement asked for the running text} -constraints runningFace -body {
+    set doc [textDoc]
+    $doc font embed dv $::fieldRunningFace
+    $doc font -family dv -missing replace
+    set refused [::tclpdfTest::refuse \
+        {$doc field text t -rect {10 10 40 8} -value "a\u4E2Db"}]
+    # A value the field's face CAN set is painted in that face alone - and
+    # the appearance does not ask the running text's replacement of
+    # Helvetica, which has no U+FFFD and would refuse the write.
+    $doc field text s -rect {10 20 40 8} -value "plain"
+    $doc field text m -rect {10 30 40 20} -multiline 1 -value "two\nlines"
+    set path [::tclpdfTest::scratch fieldText-20.6.pdf]
+    set written [catch {$doc write $path} message]
+    set streams [list [textAppearance $doc s] [textAppearance $doc m]]
+    file delete $path
+    $doc destroy
+    list $refused $written [regexp {/FEdv|ActualText} $streams] \
+        [lmap stream $streams {regexp {/FHelvetica [0-9.]+ Tf} $stream}]
+} -result {{1 1 {TCLPDF FIELD GLYPH value}} 0 0 {1 1}}
 
 test fieldText-21.1 {CRLF in a value is ONE carriage return in /V} -body {
     # 12.7.4.3 spells a break as CR. Mapping only \n turned a Windows

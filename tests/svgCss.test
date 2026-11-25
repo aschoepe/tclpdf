@@ -271,6 +271,43 @@ test svgCss-2.16 {style="" beats a class on the clip properties} -body {
       [regexp -inline {W\*? n} $rule]
 } -result {0 0 {{W n}}}
 
+# A <mask> and a <clipPath> inherit from THEIR OWN ancestors, not from the
+# element that references them (SVG 1.1, 6.2; svgClip-4.9 and 2.11 hold the
+# attribute half of it). A class on such an ancestor has to reach them the
+# same way, through the style that is handed down - the two tests below hold
+# the class half, which svgClip.tcl reads through [SvgOwnDeclarations].
+test svgCss-2.17 {the mask content inherits a fill from a class above the mask} -body {
+  # The rect in the mask states no fill. With the class of the <g> read it is
+  # white, which is a mask that lets everything through - "1 g" in the mask
+  # group; without it the initial black would mask the shape away, "0 g".
+  set doc [tclpdf new -unit mm -compress 0]
+  $doc page add
+  $doc svg -data {<svg xmlns="http://www.w3.org/2000/svg" width="100"
+      height="100" viewBox="0 0 100 100"><style>.g{fill:white}</style>
+      <g class="g"><mask id="m"><rect width="5" height="5"/></mask></g>
+      <rect mask="url(#m)" width="10" height="10" fill="red"/></svg>} \
+      -at {20 20} -size {100 100}
+  set content [$doc page content]
+  set info [$doc svg info]
+  set path [::tclpdfTest::scratch svgCss-2.17.pdf]
+  $doc write $path
+  file delete $path
+  set mask [lindex [::tclpdfTest::objects $doc /Group] 0]
+  $doc destroy
+  list [regexp {svgMask[0-9]+ gs} $content] [regexp -line {^1 g$} $mask] \
+      [regexp -line {^0 g$} $mask] $info
+} -result {1 1 0 {}}
+
+test svgCss-2.18 {clip-rule from a class above the clipPath} -body {
+  # The ring's hole is punched (W*) only if the class on the <g> around the
+  # clipPath reaches the path inside it; without it the rule is nonzero.
+  lassign [cssProbe {<style>.e{clip-rule:evenodd}</style>
+      <g class="e"><clipPath id="r"><path
+      d="M0,0 H10 V10 H0 Z M2,2 H8 V8 H2 Z"/></clipPath></g>
+      <rect clip-path="url(#r)" width="10" height="10"/>}] content info
+  list [regexp -inline {W\*? n} $content] $info
+} -result {{{W* n}} {}}
+
 # --- what [svg info] still reports ---------------------------------------
 
 test svgCss-3.1 {a block read in full is no omission} -body {

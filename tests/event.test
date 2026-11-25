@@ -272,7 +272,7 @@ test event-document-7.1 {the document refuses a subscription to an event it neve
   $doc destroy
   list $code [string match {*no event "beforeWrte"*known are: pageAdded, beforeWrite,\
       resources, catalog, info, afterWrite*} $err] $known $none [string match e* $token]
-} -result {1 1 {pageAdded beforeWrite resources catalog info afterWrite} {} 1}
+} -result {1 1 {pageAdded beforeWrite resources catalog info afterWrite glyphReplaced} {} 1}
 
 test event-document-7.2 {a bare emitter still takes any name} -body {
   set bus [eventFresh]

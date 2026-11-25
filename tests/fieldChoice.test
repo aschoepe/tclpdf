@@ -54,6 +54,12 @@ proc choiceDoc {args} {
 }
 
 # The widget annotation of one field, out of the writer.
+# DejaVu Sans, for a document whose running text has a chain and a
+# replacement the fields must not inherit.
+set ::fieldRunningFace [file join [file dirname [file dirname [file normalize \
+    [info script]]]] examples assets fonts DejaVuSans.ttf]
+testConstraint runningFace [file exists $::fieldRunningFace]
+
 proc choiceWidget {doc name} {
   set writer [$doc writer]
   for {set number 1} {$number <= [$writer count]} {incr number} {
@@ -754,6 +760,27 @@ test fieldChoice-30.3 {a typed value of an editable combo is drawn and therefore
     $doc destroy
     set outcome
 } -result {1 1 {TCLPDF FIELD GLYPH value}}
+
+test fieldChoice-30.4 {a list box and a combo box keep out the running text's chain and replacement} -constraints runningFace -body {
+    # Both paint at write time with the document's text state as it then is;
+    # a family named per call asks the replacement of it, and Helvetica has
+    # no U+FFFD - so without the field's own -missing error the write died.
+    set doc [tclpdf new -unit mm -format a4]
+    $doc page add
+    $doc font embed dv $::fieldRunningFace
+    $doc font -family dv -missing replace
+    set refused [::tclpdfTest::refuse {$doc field listbox r \
+        -rect {10 50 40 20} -options [list "a\u4E2D"]}]
+    $doc field listbox l -rect {10 10 40 20} -options {one two} -value one
+    $doc field combo c -rect {10 40 40 8} -options {Mr Mrs} -value Mrs
+    set path [::tclpdfTest::scratch fieldChoice-30.4.pdf]
+    set written [catch {$doc write $path} message]
+    set streams [list [choiceAppearance $doc l] [choiceAppearance $doc c]]
+    file delete $path
+    $doc destroy
+    list $refused $written [regexp {/FEdv|ActualText} $streams] \
+        [lmap stream $streams {regexp {/FHelvetica [0-9.]+ Tf} $stream}]
+} -result {{1 1 {TCLPDF FIELD GLYPH options}} 0 0 {1 1}}
 
 # --- round 8: the flags and the index are younger than the field -----------
 

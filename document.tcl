@@ -459,6 +459,13 @@ oo::class create ::tclpdf::document::document {
       FontToUnicode font
       text text
       textWidth text
+      textMissing textMissing
+      textReplaced textMissing
+      TextMissingOption textMissing
+      TextMissingCheck textMissing
+      TextMissingSegment textMissing
+      TextMissingShow textMissing
+      TextMissingCode textMissing
       textLines textBlock
       leader leader
       textHeight textBlock
@@ -906,8 +913,14 @@ oo::class create ::tclpdf::document::document {
   # (event.tcl) holds no PDF knowledge and asks here; a subscription to any
   # other name is refused there naming these, rather than accepted for an
   # event that never comes.
+  #
+  # glyphReplaced is the one that is not about the file's structure: it
+  # fires for every character drawn as a replacement under -missing replace
+  # (textMissing.tcl), with the code point, its position and the faces that
+  # were asked.
   method events {} {
-    return {pageAdded beforeWrite resources catalog info afterWrite}
+    return [list pageAdded beforeWrite resources catalog info afterWrite \
+        glyphReplaced]
   }
 
 }

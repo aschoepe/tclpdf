@@ -923,6 +923,7 @@ test document-strings-24.5 {no module builds a string past the document unrecord
     document.tcl {3 {the seam itself - Str, HexStr and BytesStr are what everything else uses}}
     writer.tcl {1 {/ID stays in the clear: the key is derived from it, so a reader needs it BEFORE it can decrypt (7.6.2)}}
     text.tcl {6 {strings INSIDE a content stream - the stream is encrypted as a whole, a second pass would destroy it (7.6.2)}}
+    textMissing.tcl {1 {the ActualText of a replaced character, a string INSIDE a content stream - the same reason as text.tcl (7.6.2)}}
     attach.tcl {1 {keyBytes only ASKS what the bytes would be, for the name tree order (7.9.6) - the answer never reaches the file}}
     imagePng.tcl {3 {the default of the command prefix a namespace proc takes instead of [my]}}
     image.tcl {1 {the lookup string of a palette written INTO an inline image (8.9.7) - the
