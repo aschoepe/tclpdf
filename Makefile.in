@@ -114,14 +114,21 @@ doc/$(PACKAGE_NAME).n: $(srcdir)/doc/$(PACKAGE_NAME).md
 
 doc: havepandoc doc/$(PACKAGE_NAME).html doc/$(PACKAGE_NAME).n
 
-all: havepandoc manifest.txt doc/$(PACKAGE_NAME).html doc/$(PACKAGE_NAME).n
+# pkgIndex.tcl is named here and again under install, because the version bump
+# above runs "config.status --recheck", which rewrites the Makefile and never
+# the index. Without the dependency "make install" after a new AC_INIT copied
+# the OLD index into the NEW directory - measured 1.7.3 -> 1.7.4: installed in
+# tclpdf1.7.4, it announced 1.7.3 and svg 1.13 beside an svg.tcl providing
+# 1.14, and "package require tclpdf" failed. Users met it from 1.5 -> 1.6 on.
+# In "all" as well: the tests and the examples load the tree's own index.
+all: havepandoc pkgIndex.tcl manifest.txt doc/$(PACKAGE_NAME).html doc/$(PACKAGE_NAME).n
 
 # icc/ is a DIRECTORY argument and keeps its name: the package looks for the
 # output intent profile at [file join $dir icc sRGB.icc]. It is installed
 # because it is a runtime part - its bytes end up inside every PDF/A document.
 # examples/ is deliberately NOT installed; it is documentation and travels in
 # the source archive only.
-install: all
+install: all pkgIndex.tcl
 	$(TCLSH) `@CYGPATH@ $(srcdir)/tools/install.tcl` $(PKG_TCL_SOURCES:%=$(srcdir)/%) \
 		manifest.txt pkgIndex.tcl $(srcdir)/license.terms $(srcdir)/icc \
 		$(DESTDIR)$(pkglibdir)

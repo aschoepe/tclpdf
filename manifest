@@ -1,6 +1,6 @@
-C Version\s1.7.3\s-\sconfigure.ac\sand\stclpdf.tcl\scarry\s1.7.3,\sthe\smanual\ssynopsis\sfollows;\sconfigure\sregenerated\sby\sautoconf
-D 2026-11-25T09:25:19.971
-F Makefile.in d91f5766c7267c53141b153feddddf9197a5bf92cdf5ab10a12126ba0e1fc13d
+C Refresh\spkgIndex.tcl\sbefore\sall\sand\sinstall\n\n-\sMakefile.in:\sall\sand\sinstall\sdepend\son\spkgIndex.tcl,\sso\sa\sversion\sbump\swith\sconfig.status\s--recheck\sno\slonger\sinstalls\sthe\sprevious\sindex\sinto\sthe\snew\sdirectory\n-\stests:\srelease-3.1\sinstalls\sinto\sa\sscratch\sdirectory\sover\sa\sstale\sindex
+D 2026-11-25T10:03:59.097
+F Makefile.in 0cd9a281fb6eed3403962cd07330196db2d1a5b8403ca33a721fd89c397c2b0b
 F README ead83d125dff80dd97f4e067967edc1af63b8733253ca8e52a419ef0d0a9f0f1
 F aclocal.m4 58f10c8cbd82538c278c569674ee8b9336dec628f3ca8de44d70509c8d6610c3
 F afm.tcl ae1b533f335e9bcd2a61e118f2b2200070aff50dafc0480fb296297b1c4eb968
@@ -460,7 +460,7 @@ F tests/pdfFunction.test 29ea29b867a39fea22df9d18deca2c3da83190520a66b7a2218fa5a
 F tests/pdfObj.test 0360937b0f24edb8216827034b08bea6f44ff09fe21cdc4ba4c4816bb5466ca7
 F tests/pdfVersion.test d847ac27cae706ec2b69cff93223ff55f1210c9bccffe09e01644ddcf1755d30
 F tests/pdfa.test f1b8c2cf2bd636c4f958194acdb4bab3287d0a35a1e8e412caa4771bc3597f7e
-F tests/release.test 9364a7bcb3a0cab06fc334d8d33d57ccaf3b6e74f79eaef97b0b1d039b33d388
+F tests/release.test 0d3d8c2bef469514c741a0a14a8b61c36427c98a0d494d5c43d6fb425242afd0
 F tests/sbix.test d73f19cbeb3dd4a0eb8831d57c9fe5b25b63be8d1c29a7447dca20c4bfe148aa
 F tests/sfnt.test bf237f7cf70122ccde5f05af1148c949437c113c1805b2cdeca18feaac91c9a4
 F tests/shading.test fd1d3f1aa75c48be10b46499f3e706487e7d580d15577530d7269a70be86c5de
@@ -523,8 +523,8 @@ F xObject.tcl c0c3027b218cb7e12d1217013e6696d0848a3bd667172dc6aea0bea51f789d3f
 F xml.tcl 3abe87e2da0b29d2443e9e46a25284923cee6bd19b0b059f23e5da47bb816596
 F xmp.tcl 1fe4b3a7d45f98c270230cdac79d08fef4f3bec3bc9ca32c5032a709ebe092d5
 F zugferd.tcl 9c1cc0ce0b13508a7a710725681db652ba8a10c179c823ac007d847ee7807c55
-P 02cb2421b0ac09cd474bc36125bb9bd186bbf7804ed0b156e72ecabff9025683
-R 73039ef2a5b70a0e22687354cbbf506a
+P 69b79b8507204c7a95b80cad3d7f1894e1b05df11d1206e302397ebcaac115c8
+R ec22558b2b9a264e1cf048d6bb30da4e
 U alex
-Z e7de5accf25ac0fcffafaa1b947ab71a
+Z 713fd577ffcd43ba2e1e28145a7274cf
 # Remove this line to create a well-formed Fossil manifest.

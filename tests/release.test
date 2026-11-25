@@ -26,6 +26,18 @@
 # Both need the repository: fossil on the PATH and a checkout around the
 # tree. An unpacked source archive has neither, and the tests skip there.
 #
+# A third group guards the step that puts a release down at all:
+#
+#   release-3.x  "make install" over a pkgIndex.tcl older than its template
+#                has to install the index for the version configure.ac names,
+#                not the stale one. Until 1.7.3 it installed the stale one:
+#                a version bump reruns "config.status --recheck", which never
+#                rewrites the index, and install did not depend on it - the
+#                new directory then announced the old versions and "package
+#                require tclpdf" failed.
+#
+# That one needs a configured tree (config.status) and make, not fossil.
+#
 # Copyright (C) 2026 Alexander Schoepe, Bochum, DE
 #
 # See the file "license.terms" for information on usage and redistribution
@@ -336,6 +348,102 @@ test release-2.1 {the older release in front on auto_path: every module loaded i
 test release-2.2 {the tree in front on auto_path: every module loaded is the tree's file} -constraints fossilCheckout -body {
   lassign [::releaseTest::installations] base old new
   ::releaseTest::probe [list $new $old] $new
+} -result {}
+
+# --- 3: make install over a stale index ---------------------------------------
+
+testConstraint configuredTree [expr {[auto_execok make] ne {}
+    && [file exists [file join $::releaseTest::root config.status]]
+    && [file exists [file join $::releaseTest::root Makefile.in]]}]
+
+# The installing half of the build tree, copied into a scratch directory:
+# Makefile.in and the configure output that turns it into a Makefile, the
+# template, the sources, license.terms, icc/ and tools/install.tcl. Every
+# file gets the same time an hour back, so that nothing counts as newer than
+# anything else - then the Makefile is written from THIS Makefile.in, which
+# makes the test measure the template rather than whatever Makefile the last
+# configure left behind, and a pkgIndex.tcl from an older release goes in an
+# hour older still. The manual and manifest.txt are passed to make as old
+# files: neither is what the test is about, and the manual would need pandoc.
+proc ::releaseTest::staleBuild {dir} {
+  variable root
+  set configure [encoding convertfrom utf-8 [readBytes [file join $root configure.ac]]]
+  set files [list Makefile.in config.status configure configure.ac \
+      pkgIndex.tcl.in license.terms [file join tools install.tcl]]
+  lappend files {*}[sources $configure]
+  foreach file [glob -directory [file join $root icc] -tails *] {
+    lappend files [file join icc $file]
+  }
+  set when [expr {[clock seconds] - 3600}]
+  foreach file $files {
+    writeBytes [file join $dir $file] [readBytes [file join $root $file]]
+    file mtime [file join $dir $file] $when
+  }
+  file attributes [file join $dir config.status] -permissions 0755
+  set manifest [file join $root manifest.txt]
+  writeBytes [file join $dir manifest.txt] \
+      [expr {[file exists $manifest] ? [readBytes $manifest] : {}}]
+  set here [pwd]
+  cd $dir
+  try {
+    exec ./config.status Makefile
+  } finally {
+    cd $here
+  }
+  set template [encoding convertfrom utf-8 [readBytes [file join $dir pkgIndex.tcl.in]]]
+  writeBytes [file join $dir pkgIndex.tcl] [encoding convertto utf-8 \
+      [string map {@PACKAGE_NAME@ tclpdf @PACKAGE_VERSION@ 0.1} $template]]
+  file mtime [file join $dir pkgIndex.tcl] [expr {$when - 3600}]
+  return [string map [list @PACKAGE_NAME@ tclpdf @PACKAGE_VERSION@ \
+      [acVersion $configure]] $template]
+}
+
+# Every pkgIndex.tcl below a directory: where under DESTDIR the package lands
+# is the libdir configure chose, which differs from machine to machine.
+proc ::releaseTest::indexes {dir} {
+  set found [glob -nocomplain -type f -directory $dir pkgIndex.tcl]
+  foreach sub [glob -nocomplain -type d -directory $dir *] {
+    lappend found {*}[indexes $sub]
+  }
+  return $found
+}
+
+test release-3.1 {make install over a stale pkgIndex.tcl installs the index of the version configure.ac names} -constraints configuredTree -setup {
+  set dir [::tclpdfTest::scratch release-install-[pid]]
+  file delete -force $dir
+  # The test works on the copy only; these two prove that the tree's own
+  # build files come out of it as they went in.
+  set before [list [::releaseTest::readBytes [file join $::releaseTest::root Makefile]] \
+      [::releaseTest::readBytes [file join $::releaseTest::root pkgIndex.tcl]]]
+} -body {
+  set expected [::releaseTest::staleBuild $dir]
+  exec make -C $dir install DESTDIR=[file join $dir dest] \
+      -o doc/tclpdf.html -o doc/tclpdf.n -o manifest.txt
+  set index [::releaseTest::indexes [file join $dir dest]]
+  set problems {}
+  if {[llength $index] != 1} {
+    lappend problems "[llength $index] installed indexes"
+  } else {
+    set index [lindex $index 0]
+    set installed [encoding convertfrom utf-8 [::releaseTest::readBytes $index]]
+    set announced none
+    set wanted none
+    regexp {\npackage ifneeded tclpdf (\S+)} $installed -> announced
+    regexp {\npackage ifneeded tclpdf (\S+)} $expected -> wanted
+    if {$installed ne $expected} {
+      lappend problems "[file tail [file dirname $index]]/pkgIndex.tcl announces\
+          tclpdf $announced, configure.ac names $wanted"
+    }
+  }
+  set after [list [::releaseTest::readBytes [file join $::releaseTest::root Makefile]] \
+      [::releaseTest::readBytes [file join $::releaseTest::root pkgIndex.tcl]]]
+  if {$after ne $before} {
+    lappend problems "the tree's Makefile or pkgIndex.tcl changed"
+  }
+  join $problems \n
+} -cleanup {
+  file delete -force $dir
+  unset -nocomplain dir before after expected index installed announced wanted problems
 } -result {}
 
 # The two installations go with the file, whichever of its tests ran and
